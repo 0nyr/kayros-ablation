@@ -94,6 +94,8 @@ def main():
     result = build_proposal(docs['reference_manifest'], reference_digest, docs['full_summary'],
                             docs['prefix_decision'], docs['focused_review'], horizon=args.horizon,
                             hosts=args.hosts, workers=args.workers_per_host)
+    paths.update(main_analysis=project / 'configs/main-analysis.json',
+                 schedule_generator=project / 'scripts/prepare_main_schedule.py')
     result['evidence'] = {name: {'path': str(path.resolve()), 'sha256': sha256(path)}
                           for name, path in paths.items()}
     result['generator_sha256'] = sha256(Path(__file__))
