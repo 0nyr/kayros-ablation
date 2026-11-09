@@ -39,8 +39,10 @@ mapfile -t main_hosts < <(awk '!seen[$0]++' "$OAR_NODEFILE")
 main_source="$HOME/<main-prepared-source>"
 main_root="$HOME/<main-output-root>"
 main_upstream_manifest="$HOME/<main-prepared-upstream-manifest>.json"
+mkdir -p "$main_root/coordinator-logs"
+main_log="$main_root/coordinator-logs/<unique-main-wave>.log"
 
-"$HOME/ms56-ablation/experiment/.venv/bin/python" \
+nohup "$HOME/ms56-ablation/experiment/.venv/bin/python" \
   "$main_source/scripts/development_wave.py" \
   --mode coordinator \
   --root "$main_root" \
@@ -69,8 +71,13 @@ main_upstream_manifest="$HOME/<main-prepared-upstream-manifest>.json"
   --upstream-manifest "$main_upstream_manifest" \
   --upstream-worker "$HOME/ms56-phase2/upstream/upstream_event_worker.py" \
   --wave-name '<unique-main-wave>' \
-  --label 'approved main campaign'
+  --label 'approved main campaign' \
+  >"$main_log" 2>&1 </dev/null &
+main_coordinator_pid=$!
+printf 'Coordinator PID %s, log %s\n' "$main_coordinator_pid" "$main_log"
 ```
+
+The `nohup` wrapper, persistent coordinator log and detached standard input keep the coordinator independent of the attached shell. Confirm its process and initial log before leaving the shell. Preserve the coordinator PID and log with the execution record.
 
 Explicit flags are essential. Without `--hosts`, the driver uses only the first 3 allocated hosts. The default selection contains 12 instances, the default repetition count is 1, and omission of `--upstream-manifest` produces only 4 arms. The defaults for workers, memory and horizon are 16, 8,192 MiB and 60 s. The default patch lists omit the later closure-census and effective-setting patches. The complete command above yields 56 instances, 5 configurations and 5 trials, with exactly 1 full-arm prefix. The HiGHS inventory retains the CPLEX-only patch as source provenance, matching the reviewed pilot inventory.
 
