@@ -66,7 +66,7 @@ R202 full/prefix180/trial3 has 11 distinct rejected generated routes and times o
 
 ## Artifacts and reservation
 
-Abaca job 7012887 used 33 grvingt hosts with at most 10 workers each. At 12:32:26 CET, the sealed wave had 324 results, zero workers/native children and complete RSS/virtual observers. The allocation was then released. The separate 6-host focused job 7012889 has completed its pilot, and allocation release has been requested. Main analysis and plots ran on unused core 62 of reserved grvingt-25, outside the focused solver cores.
+Abaca job 7012887 used 33 grvingt hosts with at most 10 workers each. At 12:32:26 CET, the sealed wave had 324 results, zero workers/native children and complete RSS/virtual observers. The allocation was then released. The separate 6-host focused job 7012889 also completed its pilot and was released after final analysis and proposal generation. Main analysis and plots ran on unused core 62 of reserved grvingt-25, outside the focused solver cores.
 
 The raw wave is `outputs/ms56-phase3/repeat3600-16g-seeds3/`, with wave SHA-256 `42bf4a5b64db44e1666a85ca7b08a4a3d4e2cacd96794f9c5f278fb762a6d254`. All 3,093 raw files and 81,988,388 bytes are locally verified by SHA-256 and size, separately from derived `analysis/` extras. The adjacent `.local-verification.json` and `.recovery-audit.json` receipts record zero transfer mismatches and all 324 terminal identities passing recovery checks, with no orphaned cells or runtime-manifest errors. One unreadable partial artifact had its original mode recorded before owner-read permission was added for archival. No content was changed. The verified remote raw wave and its transferred tar were then deleted. The focused wave and required runtime/input/checker caches remain intact.
 
