@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "scope": "main_campaign_analysis",
+  "raw_gap_targets": [
+    0.0,
+    0.01,
+    0.05
+  ],
+  "raw_gap_definition": "(checked_cost - frozen_reference_cost) / frozen_reference_cost",
+  "attainment_rule": "A checked incumbent attains a target when its raw gap is at most the target. Missing incumbents do not attain any target.",
+  "aggregation": "Equal instance weights, with equal trial weights within each instance. All scheduled cells remain in the denominator.",
+  "deliverables": [
+    "Mean squeezed-gap and raw-gap target-attainment curves at all frozen targets.",
+    "Reported computational-closure attainment and restricted mean closure time, with checked witnesses and native guard qualifications.",
+    "Mean compatible primal-dual residual (U - L) / U, with explicit missing-pair convention and bound availability.",
+    "Aligned per-instance status matrix with trial proportions or labelled trial panels and separate failure/guard annotations."
+  ],
+  "deliverable_scope": "Bound-residual, availability and status-matrix figures are main-analysis deliverables, not pilot-completion or main-launch gates."
+}

@@ -31,6 +31,10 @@ class MainProposalTests(unittest.TestCase):
     def test_concrete_complete_population_is_still_nonlaunchable(self):
         proposal = build_proposal(*self.inputs(), horizon=7200, hosts=40, workers=10)
         tasks = proposal['scheduled_cells']
+        analysis = proposal['main_analysis']
+        self.assertEqual(analysis, json.loads((ROOT / 'configs/main-analysis.json').read_bytes()))
+        self.assertEqual(analysis['raw_gap_targets'], [0.0, 0.01, 0.05])
+        self.assertEqual(analysis, json.loads((ROOT / 'configs/main-schedule-template.json').read_bytes())['main_analysis'])
         self.assertFalse(proposal['launchable'])
         self.assertTrue(proposal['author_review_required'])
         self.assertEqual(len(tasks), 1400)

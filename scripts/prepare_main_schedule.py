@@ -35,6 +35,7 @@ def build_templates(reference: dict, reference_digest: str) -> tuple[dict, dict]
         'common_horizon_s': None, 'selected_full_prefix_s': None,
         'paired_heuristic_seeds': [42, 123, 456, 789, 2026],
         'cold_exact_search_seed': None, 'placement_and_runtime_manifests': 'not assigned',
+        'main_analysis': json.loads((Path(__file__).resolve().parents[1] / 'configs/main-analysis.json').read_bytes()),
         'scheduled_cells': tasks}
     if len(tasks) != 1400 or len({task['task_id'] for task in tasks}) != 1400:
         raise ValueError('Main template population or identity collision')

@@ -38,7 +38,7 @@ Compare fixed heuristic prefixes of 15, 60, 180, 600 and 1,800 seconds in the pi
 
 For incumbent cost `z` and positive reference cost `z_ref`, compute the squeezed gap `(z - z_ref) / (z + z_ref)`. It is 1 before any feasible incumbent. Retain the best-so-far envelope of checker-valid candidates. Transform each run before averaging, give instances equal weight, and average the 5 trials within each instance.
 
-Λ is the exact step-curve integral of that squeezed gap over the common elapsed-time horizon, divided by the horizon. Use uniform time weighting, including when a plot has a logarithmic time axis. No incumbent gives Λ = 1. Improvements below the reference may yield negative gaps. Proposed raw gap goals are 0%, 1% and 5%. A zero reference gap is reference attainment, not proof.
+Λ is the exact step-curve integral of that squeezed gap over the common elapsed-time horizon, divided by the horizon. Use uniform time weighting, including when a plot has a logarithmic time axis. No incumbent gives Λ = 1. Improvements below the reference may yield negative gaps. The main raw-gap goals are frozen at 0%, 1% and 5% in [the main-analysis specification](../configs/main-analysis.json). A checked incumbent attains a goal when its raw gap `(z - z_ref) / z_ref` is at most that goal. Missing incumbents attain no goal and remain in the denominator. Existing 1% pilot plots remain scoped pilot summaries. A zero reference gap is reference attainment, not proof.
 
 Report mean Λ, mean final squeezed gap, feasible-run counts and reference-attainment counts. A finite final raw-gap average restricted to feasible runs must identify its conditional population. Unsuccessful runs remain in the main denominator.
 
@@ -51,6 +51,8 @@ The restricted mean time to proof is the area under the unproved fraction over t
 A proposed bound-gap diagnostic is `(U - L) / U` for positive finite incumbent `U` and a compatible valid global lower bound `0 <= L <= U`. Use an explicit initial convention, such as residual 1, before a useful pair exists, and expose bound availability. Incomplete root pricing does not justify treating the restricted-master value as a global lower bound. Contradictions are integrity events. A near-zero displayed gap is not a substitute for solver proof completion.
 
 Preserve fixed instance ordering in status matrices. Distinguish no valid incumbent, feasible but unproved, and accepted optimality proof, with optional reference-attainment annotation. Mark crashes, memory limits and rejected claims separately. For 5 trials, show proportions or clearly labelled trial panels, not a selected best run.
+
+The mean compatible primal-dual residual, explicit bound availability and aligned per-instance status matrix are main-analysis deliverables. Their implementation is not a pilot-completion or main-launch gate. The frozen analysis specification travels with the nonlaunchable main schedule and concrete proposal.
 
 ## Reproducibility requirements before a campaign
 
