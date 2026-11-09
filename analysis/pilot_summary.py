@@ -13,6 +13,16 @@ from checker_contract import checker_identity
 from probe_runner import digest
 
 
+def resource_failure_kind(result, stderr):
+    """Identify an observed allocation exception without inferring its OS cause."""
+    if not result or result.get('status') != 'failed' or result.get('returncode') != 1:
+        return None
+    lines = stderr.decode('utf-8', errors='replace').strip().splitlines()
+    if lines and (lines[-1] == 'MemoryError' or lines[-1].startswith('MemoryError:')):
+        return 'memory_allocation_failure'
+    return None
+
+
 def assert_scheduled_row(task, row):
     """Refuse a row associated with another scheduled task, including failures."""
     if row and row.get('task_id') != task['task_id']:
@@ -182,6 +192,7 @@ def summarize(wave_path, snapshot):
         guard_stderr_count = guard_stderr.count(b'M5.9: skipped checker-infeasible priced route')
         guard_warning = bool(native_guard_count) or guard_stderr_count > 0
         cells.append({**task, 'run_id': run_id, 'status': result['status'] if result else row.get('status','pending'),
+                      'resource_failure_kind': resource_failure_kind(result, guard_stderr),
                       'completed_record': result is not None, 'finished_task': bool(row), **score,
                       'invalid_candidate_count': sum(not c.get('valid', False) for c in validation.get('candidates', [])),
                       'max_abs_native_checked_discrepancy': max((abs(c['native_minus_checked']) for c in validation.get('candidates', []) if c.get('native_minus_checked') is not None), default=0.),
@@ -210,6 +221,7 @@ def summarize(wave_path, snapshot):
         def avg(field):
             return statistics.mean(statistics.mean(c[field] for c in r) for r in by_instance.values())
         groups.append({'configuration': key, 'scheduled': len(rows), 'completed_records':sum(c['completed_record'] for c in rows),
+                       'memory_allocation_failures':sum(c['resource_failure_kind'] == 'memory_allocation_failure' for c in rows),
                        'feasible':sum(c['final_checked_cost'] is not None for c in rows),
                        'reference_attained':sum(c['reference_attainment_s'] is not None for c in rows),
                        'invalid_candidate_count':sum(c['invalid_candidate_count'] for c in rows),

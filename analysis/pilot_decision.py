@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import statistics
 
-from pilot_summary import score_trace
+from pilot_summary import resource_failure_kind, score_trace
 
 
 def configuration(cell):
@@ -53,12 +53,11 @@ def decide(report, wave):
     checkpoint_rows = []
     last_quarter = []
     blocking_cells = []
+    resource_outcome_cells = []
     for cell in cells:
         result_path = wave / 'cells' / cell['run_id'] / 'result.json' if cell['run_id'] else None
         reasons = []
         result = {}
-        if cell.get('status') not in ('completed', 'deadline'):
-            reasons.append('summary_status_not_clean')
         if result_path is None or not result_path.is_file():
             reasons.append('missing_result')
         else:
@@ -69,14 +68,27 @@ def decide(report, wave):
                     result = {}
             except (OSError, ValueError) as error:
                 reasons.append('unreadable_result:' + type(error).__name__)
+        stderr_path = result_path.parent / 'stderr.log' if result_path else None
+        stderr = stderr_path.read_bytes() if stderr_path and stderr_path.is_file() else b''
+        resource_kind = resource_failure_kind(result, stderr)
+        if cell.get('status') not in ('completed', 'deadline') and not (
+                cell.get('status') == 'failed' and resource_kind):
+            reasons.append('summary_status_not_clean')
+        if resource_kind:
+            resource_outcome_cells.append({
+                'task_id': cell['task_id'], 'configuration': configuration(cell),
+                'instance_name': cell['instance_name'], 'replicate': cell['replicate'],
+                'run_id': cell['run_id'], 'resource_failure_kind': resource_kind,
+                'capped_reported_closure_s': cell['capped_reported_closure_s'],
+                'lambda': cell['lambda']})
         if result_path is not None and result_path.is_file():
-            if result.get('status') not in ('completed', 'deadline'):
+            if result.get('status') not in ('completed', 'deadline') and not resource_kind:
                 reasons.append('result_status_not_clean')
             if result.get('status') == 'completed' and result.get('returncode') != 0:
                 reasons.append('completed_with_nonzero_returncode')
             if result.get('status') == 'deadline' and result.get('returncode') not in (0, -9):
                 reasons.append('deadline_with_unexpected_returncode')
-            if result.get('returncode', 0) is not None and result.get('returncode', 0) > 0:
+            if result.get('returncode', 0) is not None and result.get('returncode', 0) > 0 and not resource_kind:
                 reasons.append('worker_exit_failure')
             if result.get('issues'):
                 reasons.append('result_issues')
@@ -140,6 +152,7 @@ def decide(report, wave):
         'tie_rule': 'Exact equality of computed aggregate values. Sensitivity analyses do not override the approved ordering.',
         'recommendation_eligible': not blocking_cells,
         'blocking_cells': blocking_cells,
+        'resource_outcome_cells': resource_outcome_cells,
         'native_guard_review_warnings': [
             {'task_id': cell['task_id'], 'configuration': configuration(cell),
              'reported_closure_s': cell['reported_closure_s'],
@@ -157,7 +170,8 @@ def decide(report, wave):
             'Prefixes longer than an earlier checkpoint have not entered exact search at that checkpoint.',
             'Observed stagnation within this horizon does not establish behavior beyond it.',
             'The selected prefix is a design recommendation, not authorization to launch the main campaign.',
-            'All scheduled cells remain in diagnostic rankings. Concrete failures or invalid candidates block the recommendation until review and any required reruns.',
+            'All scheduled cells remain in rankings. Observed allocation failures are valid resource-budget outcomes and do not block selection. Their checked incumbents are retained, and absence of closure contributes the full horizon.',
+            'Invalid candidates, integrity/artifact issues and unclassified crashes require review before a recommendation. A generic signal exit is not inferred to be a memory failure.',
             'Source-level closure-census diagnostics alone do not block a recommendation.',
         ],
     }
