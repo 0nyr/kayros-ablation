@@ -1,5 +1,5 @@
 {
-  "status": "focused_pilot_running_main_held_for_review",
+  "status": "pilot_validation_complete_main_held_for_author_inspection",
   "kayros": {
     "version": "1.6.1",
     "commit": "50eebc57964ac4f6762719ff21033783a31c12da",
@@ -82,15 +82,25 @@
         "hosts": 6,
         "maximum_workers_per_host": 10,
         "purpose": "separate targeted horizon and memory sensitivity",
-        "status": "running"
+        "status": "completed_all_54_cells"
       }
     ]
   },
   "main": {
-    "provisional_horizon_seconds": 7200,
     "trials_per_arm": 5,
     "arms": 5,
-    "provisional_memory_limit_mib": 16384
+    "recommended_horizon_seconds": 7200,
+    "recommended_memory_limit_mib": 16384,
+    "recommended_workers_per_host": 10,
+    "recommended_hosts": 47,
+    "proposal_path": "configs/main-proposal.json",
+    "horizon_resource_evidence": {
+      "wave_name": "focused7200-16g-seeds3",
+      "wave_id": "800f94098f3c4878a84639d97c54da52",
+      "review_path": "outputs/ms56-phase3/focused7200-16g-seeds3/analysis/horizon-review.json",
+      "review_sha256": "5b538a3df517dfbead2d46e770ef2d0e279ffd5bcc6db1c29e00a1d79e7c5b70",
+      "resource_data_sha256": "5fefd0be96995ca1ef22743f518cb5ab696939f61b3af6e22cbbb024f0a946d9"
+    }
   },
   "arms": [
     {
@@ -175,8 +185,7 @@
     "reported": false
   },
   "pending": [
-    "completed_focused_16g_two_hour_pilot",
-    "main_horizon_and_resource_shape",
-    "main_frozen_manifest_and_author_review"
+    "author_inspection_before_main_launch",
+    "main_allocation_and_frozen_execution_manifest"
   ]
 }
