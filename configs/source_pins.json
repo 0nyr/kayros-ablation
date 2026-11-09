@@ -53,12 +53,42 @@
       3
     ],
     "selection_path": "configs/pilot-selection.json",
-    "current_trials": 3
+    "current_trials": 3,
+    "followup_waves": [
+      {
+        "wave_name": "repeat3600-16g-seeds3",
+        "wave_id": "101496d713584bf0bb99b44dc96644b3",
+        "oar_job_id": 7012887,
+        "instances": 12,
+        "cells": 324,
+        "horizon_seconds": 3600,
+        "memory_limit_mib": 16384,
+        "hosts": 33,
+        "maximum_workers_per_host": 10,
+        "purpose": "matched global prefix selection under revised resources"
+      },
+      {
+        "wave_name": "focused7200-16g-seeds3",
+        "wave_id": "800f94098f3c4878a84639d97c54da52",
+        "oar_job_id": 7012889,
+        "instances": [
+          "C104",
+          "RC202"
+        ],
+        "cells": 54,
+        "horizon_seconds": 7200,
+        "memory_limit_mib": 16384,
+        "hosts": 6,
+        "maximum_workers_per_host": 10,
+        "purpose": "separate targeted horizon and memory sensitivity"
+      }
+    ]
   },
   "main": {
     "provisional_horizon_seconds": 7200,
     "trials_per_arm": 5,
-    "arms": 5
+    "arms": 5,
+    "provisional_memory_limit_mib": 16384
   },
   "arms": [
     {
@@ -137,7 +167,8 @@
     "reported": false
   },
   "pending": [
-    "completed_one_hour_pilot",
+    "completed_matched_16g_one_hour_pilot",
+    "completed_focused_16g_two_hour_pilot",
     "selected_prefix_duration",
     "main_horizon_and_resource_shape",
     "main_frozen_manifest_and_author_review"

@@ -1,6 +1,14 @@
 # Main-campaign readiness review
 
-Status: preparation while the 1-hour pilot runs. This is not launch authorization. Final prefix, horizon and resource recommendations await the completed 324-cell pilot and the author's inspection. No main reservation has been submitted.
+Status: the 8 GiB pilot exposed an allocation failure. The author requested both a full-panel repeat and a focused 2-hour follow-up, on separate nodes, and then requested more memory per process. Both follow-ups now use 16 GiB and 10 workers per node. Final recommendations await those results and author inspection. No main reservation has been submitted.
+
+## Authorized resource follow-ups
+
+The original C104 full/prefix15/trial1 and RC202 cold CPLEX/trial1 runs failed with `std::bad_alloc` under their 8 GiB address-space caps. All 8 candidates emitted by the first remain checker-valid, while the second emitted none. Preserve both as resource-failed observations in the [completed original wave](ms56-hour-pilot-8g.md). A separate live-process snapshot found virtual-memory peaks as high as 7.114 GiB, so RSS alone understated proximity to the address-space cap.
+
+The full 12-instance repeat retains all 9 configurations and 3 trials at 3,600 s, giving 324 cells. Its 16 GiB resource setting supplies the matched panel for the global prefix decision. Abaca job 7012887 requests 33 grvingt hosts for 90 minutes, with 10 workers per host. The focused C104/RC202 follow-up retains all configurations and trials at 7,200 s, giving 54 cells. Job 7012889 requests 6 separate grvingt hosts for 150 minutes, also with 10 workers per host. Its purpose is horizon and resource sensitivity on the two largest observed memory users. It is not pooled with the other 10 original instances to manufacture a matched full-panel result.
+
+Both allocations use `--memory-mb 16384`, corresponding to a 17,179,869,184-byte per-process address-space cap. The unchanged node guard requires 176 GiB available RAM for 10 such workers plus its 16 GiB reserve. The superseded queued 24-node/12 GiB request, job 7012876, was cancelled. No result from the original 8 GiB wave is overwritten or silently replaced.
 
 ## Scientific comparison
 
@@ -18,7 +26,7 @@ The [RC105 guard assessment](ms56-rc105-guard.md) records a native rejected-colu
 |---|---|---|
 | Global full-arm prefix | Minimum restricted mean reported computational-closure time, then mean Λ, then shorter prefix | Complete 3-trial comparison of 15, 60, 180, 600 and 1,800 s |
 | Common horizon | Provisional 7,200 s from process launch | Same-wave horizon checkpoints, last-quarter incumbent/closure progress, execution health |
-| Memory cap and workers per node | Assess 8 GiB × 16 workers versus 12 GiB × 14 workers | Final per-cell native/process-tree memory observations and actual node RAM guard |
+| Memory cap and workers per node | Follow-ups use 16 GiB × 10 workers | Their final per-process virtual-memory and RSS observations, plus actual node RAM guard |
 | Full schedule | 56 instances × 5 arms × 5 trials = 1,400 cells | Offline schedule identity checks and frozen runtime/source inventories |
 | Main launch | Author inspection of pilot plots and recommendation | Completed pilot review |
 
@@ -30,14 +38,14 @@ At a 2-hour horizon, the design has at most 2,800 solver core-hours. Total job w
 
 | Hosts | Workers per host | Concurrent slots | Maximum rounds | Walltime upper bound with margin |
 |---:|---:|---:|---:|---:|
-| 44 | 16 | 704 | 2 | 4 h 30 min |
-| 50 | 14 | 700 | 2 | 4 h 30 min |
-| 40 | 16 | 640 | 3 | 6 h 30 min |
-| 40 | 14 | 560 | 3 | 6 h 30 min |
+| 47 | 10 | 470 | 3 | 6 h 30 min |
+| 50 | 10 | 500 | 3 | 6 h 30 min |
+| 40 | 10 | 400 | 4 | 8 h 30 min |
+| 33 | 10 | 330 | 5 | 10 h 30 min |
 
 Each process receives one distinct allowed CPU, one backend thread and the declared address-space limit. The node guard checks the configured caps plus its RAM reserve against actual memory. The final shape must use current free capacity and the real OAR nodefile. A smaller worker count can increase memory headroom without increasing the number of rounds when enough hosts are available. We will release the pilot reservation after archival and release main resources as soon as their assigned work is complete.
 
-The official grvingt status API at approximately 11:00 CET reported 38 alive/busy nodes (including the 21 pilot hosts), 6 alive/free, 14 standby/free, 1 free with best-effort work, 3 dead and 2 absent. Counting the pilot hosts after their release gives approximately 41 clearly usable hosts before other allocations change. The 40-host, 3-round calculation is therefore more realistic at this checkpoint than assuming 50 hosts will immediately be free. Capacity will be checked again after the author review. No allocation is implied by this snapshot.
+The official grvingt status API at approximately 11:00 CET reported 38 alive/busy nodes (including the 21 pilot hosts), 6 alive/free, 14 standby/free, 1 free with best-effort work, 3 dead and 2 absent. Counting the pilot hosts after their release gives approximately 41 clearly usable hosts before other allocations change. With the updated 10-worker shape, 40 hosts require 4 worst-case main rounds. Capacity will be checked again after the author review. No main allocation is implied by this snapshot.
 
 ## Execution and archival
 

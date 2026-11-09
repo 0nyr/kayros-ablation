@@ -34,4 +34,3 @@ The primary observation is the first execution-complete attempt by attempt numbe
 ## Tests
 
 The focused fixtures use tiny synthetic subprocesses and declared synthetic checker evidence. They verify file immutability, missing-row detection, incomplete-claim refusal, wave and runtime drift, task association, corrupted envelopes and preservation of failed terminal outcomes. They are harness tests and provide no solver-performance observations.
-

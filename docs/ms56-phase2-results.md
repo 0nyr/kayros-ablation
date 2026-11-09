@@ -1,6 +1,6 @@
 # Intermediate pilot results
 
-Status: 60 s and 300 s development waves complete. The prespecified 1-hour pilot is running on Abaca job 7012808, with 324 cells on 21 grvingt hosts. The main campaign remains held for review.
+Status: 60 s, 300 s and the original 1-hour/8 GiB wave are complete. The [1-hour report](ms56-hour-pilot-8g.md) preserves its 2 allocation failures and qualified closure outcomes. The author requested a full 16 GiB repeat and a focused 2-hour follow-up on separate allocations. The main campaign remains held for review.
 
 ## Scope and protocol
 

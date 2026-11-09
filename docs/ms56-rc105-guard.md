@@ -1,4 +1,4 @@
-# RC105 rejected-column diagnostic
+# Rejected-column diagnostics in RC105 and RC202
 
 Status: source, recorded-log and pinned route-only diagnostic assessment. A rejected priced column qualifies the affected solver-reported closure. No invalid final incumbent or material wrong final objective has been demonstrated by this evidence. The stricter native certificate-poison condition remains unchanged.
 
@@ -25,6 +25,14 @@ The preserved route-only diagnostic uses the exact pinned v0.11 checker identity
 This identifies a strict temporal boundary rejection much smaller than the vendored labeling EPS of 1e-6. The backend LP tolerance of 1e-7 is a separate numerical setting, not a customer time-window allowance. The observed rejection is consistent with a tolerance-boundary labeling proposal being caught by stricter temporal composition. It is not evidence that an infeasible column entered the master. Together with the matching checked final objective and native bound differing only by approximately -3.64e-12, the diagnostic supplies no observed material wrong final result. It does not prove that every feasible improving alternative was generated.
 
 The diagnostic JSON and script are retained in ignored `outputs/ms56-phase2/native-diagnostics/rc105-column-v011.json` and `rc105_route_diagnostic.py`. The JSON SHA-256 is `ceadda58a69d642afecd7a9b0f0aeb71630d9fa39c1300343cb1c6e66a24d82d`. It records checker/instance identity, every prefix domain, the scalar FIFO trace and capacity checks, without validation timing. No solver artifact or historical raw guard field is changed by this assessment.
+
+## RC202 timeout-only guard cases
+
+The original 8 GiB, 1-hour pilot also preserves the same native warning for `RC202--kayros-full-cplex--prefix600.0--rep3` and `RC202--kayros-full-cplex--prefix1800.0--rep3`. Both are deadline exits without a closure event. Their stderr identifies `[0, 37, 42, 3, 7, 65, 101]`. No final native rejection count is available after those interruptions, so the analysis records the observed stderr warnings while leaving the final counter unknown. Their earlier checked incumbents remain in the primal traces.
+
+An authorized route-only replay on an unused reserved core used the same pinned v0.11 checker and frozen RC202 input. Load is 66 against capacity 1,000 and IDs are unique. Prefix composition first becomes empty at customer 65: minimum arrival is 1310.0000000000002 against due time 1310.0. The overrun is 2.2737367544323206e-13, 1 binary64 unit in the last place at that value. The scalar FIFO trace agrees. This identifies another strict temporal boundary rejection far below the labeling EPS, rather than an observed material wrong incumbent. There is no closure claim in these 2 timeout cases to promote or retract.
+
+The JSON and executed script are retained as ignored `outputs/ms56-phase2/native-diagnostics/rc202-column-v011.json` and `rc202_route_diagnostic.py`. The JSON SHA-256 is `ee530de129671055be30521272b045d2fb7c6b2ab6ce0a7a7c196c036a9d8112`. Resource provenance records job 7012889, grvingt-24, unused core 62 and a 2 GiB diagnostic address-space cap. No solver search, frozen pilot artifact or validation timing is added by this route-only diagnostic.
 
 ## Reporting treatment
 

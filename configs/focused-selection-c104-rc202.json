@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "status": "author_requested_focused_followup_before_launch",
+  "reference_manifest_sha256": "ea7310862b191655ff3109ee303afdd9dd420664da4ebb82ea30790ac415af66",
+  "source_pilot_selection_sha256": "a82f0a5214d187b76899d59dec83d79d5474b3e30137277a5d59c7f609de07b8",
+  "rule": "Author-requested C104/RC202 horizon and memory follow-up after observed 8 GiB allocation failures. This is outcome-informed development selection, not an independent representative panel.",
+  "planned_horizon_s": 7200,
+  "planned_memory_mb": 16384,
+  "planned_repetitions": 3,
+  "planned_full_prefixes_s": [
+    15,
+    60,
+    180,
+    600,
+    1800
+  ],
+  "selected_instances": [
+    {
+      "instance": "C104",
+      "class": "C1",
+      "historical_stratum": "not_declared_proven",
+      "instance_sha256": "5ac4fad5011729262d3a25c3654c34661d14e635b109feb9e4ce8df594a630c3",
+      "source_reference_sha256": "74687f76ce90f61a770b72054ca35a6cc2e298ed775d5ff38aaabde67fadac89"
+    },
+    {
+      "instance": "RC202",
+      "class": "RC2",
+      "historical_stratum": "not_declared_proven",
+      "instance_sha256": "b7d6322bbb252fa75e17984c69a073058f3ae0a4dfa64ec85b61ec0f020daa23",
+      "source_reference_sha256": "bc972edf243d3a1401d6f2f575125ea1f0976100e260bd07086da605f40e5af0"
+    }
+  ]
+}
