@@ -30,6 +30,30 @@ class PilotDecisionTests(unittest.TestCase):
                 'issues': [], 'validation': {'candidates': [{'valid': True}],
                     'checked_envelope': [{'elapsed_s': 5., 'checked_cost': 10.}]}}))
 
+    def test_graceful_resource_with_closure_requires_review(self):
+        import hashlib
+        from test_resource_outcomes import evidence
+        report = self.report()
+        identity, raw = evidence('kayros-full-cplex', 0, 'completed')
+        report['cells'][0]['run_id'] = identity['run_id']
+        events = [{'event': 'phase', 'phase': 'exact_return', 'status': 'MemoryLimitReached'},
+                  {'event': 'closure', 'elapsed_s': 20.}]
+        event_bytes = ('\n'.join(json.dumps(e) for e in events)+'\n').encode()
+        raw.update(events_sha256=hashlib.sha256(event_bytes).hexdigest(), issues=[],
+                   validation={'candidates': [{'valid': True}], 'checked_envelope': []})
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.write_results(root, report)
+            directory = root/'cells'/identity['run_id']
+            (directory/'result.json').write_text(json.dumps(raw))
+            (directory/'identity.json').write_text(json.dumps(identity))
+            (directory/'events.jsonl').write_bytes(event_bytes)
+            result = decide(report, root)
+        self.assertFalse(result['recommendation_eligible'])
+        self.assertIn('resource_outcome_with_closure_or_proof_claim', result['blocking_cells'][0]['reasons'])
+        self.assertEqual(result['resource_outcome_cells'][0]['resource_failure_kind'], 'native_memory_limit_reached')
+        self.assertEqual(sum(r['scheduled'] for r in result['prefix_ranking']), 2)
+
     def test_equal_instance_weighting_keeps_failed_cell(self):
         cells = [self.cell(15, repetition=i, closure=0.) for i in range(3)]
         cells.append(self.cell(15, instance='B', closure=None, integral=1.))

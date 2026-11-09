@@ -1,5 +1,6 @@
 """Rank fixed prefixes and describe horizon sensitivity in a completed pilot."""
 import argparse
+import hashlib
 from collections import defaultdict
 import json
 from pathlib import Path
@@ -70,7 +71,21 @@ def decide(report, wave):
                 reasons.append('unreadable_result:' + type(error).__name__)
         stderr_path = result_path.parent / 'stderr.log' if result_path else None
         stderr = stderr_path.read_bytes() if stderr_path and stderr_path.is_file() else b''
-        resource_kind = resource_failure_kind(result, stderr)
+        identity_path = result_path.parent / 'identity.json' if result_path else None
+        events_path = result_path.parent / 'events.jsonl' if result_path else None
+        identity = json.loads(identity_path.read_text()) if identity_path and identity_path.is_file() else {}
+        events = []
+        if events_path and events_path.is_file():
+            raw = events_path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() == result.get('events_sha256'):
+                events = [json.loads(line) for line in raw.splitlines()]
+            else:
+                reasons.append('events_digest_mismatch')
+        resource_kind = resource_failure_kind(result, stderr, identity=identity, events=events)
+        proof_claim = (result.get('validation') or {}).get('proof', {}).get('status') == 'accepted'
+        if resource_kind and (any(e.get('event') == 'closure' for e in events) or proof_claim
+                              or cell.get('resource_closure_conflict')):
+            reasons.append('resource_outcome_with_closure_or_proof_claim')
         if cell.get('status') not in ('completed', 'deadline') and not (
                 cell.get('status') == 'failed' and resource_kind):
             reasons.append('summary_status_not_clean')

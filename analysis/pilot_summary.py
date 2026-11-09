@@ -13,13 +13,47 @@ from checker_contract import checker_identity
 from probe_runner import digest
 
 
-def resource_failure_kind(result, stderr):
-    """Identify an observed allocation exception without inferring its OS cause."""
-    if not result or result.get('status') != 'failed' or result.get('returncode') != 1:
+UPSTREAM_BINARY_SHA256 = 'fb05b79a48c2c338b4bec4efa72daf5e401c60a1c942b97d988ef95e3b56955b'
+UPSTREAM_ADAPTER_SHA256 = 'd16cffc4e1a82c7eb7ccea6d5ff90a1a67ec7fcc4817ce40d393678451b4eade'
+KAYROS_ADAPTER_SHA256 = 'ccbf6eba1af213ceaba4cfc55d07bdab619e72474bd7ad2e266f6ccea031b029'
+KAYROS_EXACT_ARMS = {'kayros-bpca-cplex', 'kayros-bpca-highs', 'kayros-full-cplex'}
+KAYROS_LERA_SHA256 = {
+    '234737646dcb2c175c4990d02f7e3e214b8d975adb94349f24c369503884a5fd',
+    'fc23881b826c615243be94790a1d5873ed845fccb3e5e7552ac3bc3c21c0f287',
+}
+
+
+def resource_failure_kind(result, stderr, *, identity=None, events=()):
+    """Classify recorded resource evidence; never infer exhaustion from a signal."""
+    if not result:
         return None
-    lines = stderr.decode('utf-8', errors='replace').strip().splitlines()
-    if lines and (lines[-1] == 'MemoryError' or lines[-1].startswith('MemoryError:')):
-        return 'memory_allocation_failure'
+    if result.get('status') == 'failed' and result.get('returncode') == 1:
+        lines = stderr.decode('utf-8', errors='replace').strip().splitlines()
+        if lines and (lines[-1] == 'MemoryError' or lines[-1].startswith('MemoryError:')):
+            return 'memory_allocation_failure'
+    identity = identity or {}
+    manifest = identity.get('manifest', {})
+    core = {k: v for k, v in identity.items() if k not in ('run_id', 'manifest')}
+    bound = (bool(identity.get('run_id')) and identity.get('run_id') == result.get('run_id')
+             and digest(core) == identity.get('run_id')
+             and identity.get('manifest_hash') == digest(manifest)
+             and result.get('manifest_hash') == digest(manifest))
+    runtime = manifest.get('runtime_files', {})
+    command = identity.get('command', [])
+    adapter = runtime.get(command[1]) if len(command) > 1 else None
+    arm = identity.get('parameters', {}).get('arm')
+    if (bound and arm == 'lera-exact' and adapter == UPSTREAM_ADAPTER_SHA256
+            and runtime.get(manifest.get('worker_environment', {}).get('UPSTREAM_PROBE_BINARY')) == UPSTREAM_BINARY_SHA256
+            and result.get('status') == 'failed' and result.get('returncode') == 3):
+        return 'upstream_native_allocation_failure'
+    known_kayros = any(Path(k).name.startswith('_lera.') and v in KAYROS_LERA_SHA256
+                       for k, v in runtime.items())
+    if (bound and known_kayros and arm in KAYROS_EXACT_ARMS
+            and identity.get('parameters', {}).get('worker_sha256') == KAYROS_ADAPTER_SHA256
+            and result.get('status') in ('completed', 'deadline')
+            and any(e.get('phase') in ('exact_return', 'exact_terminated')
+                    and e.get('status') == 'MemoryLimitReached' for e in events)):
+        return 'native_memory_limit_reached'
     return None
 
 
@@ -145,6 +179,7 @@ def summarize(wave_path, snapshot):
         row = json.loads(record_path.read_text()) if record_path.exists() else {}
         assert_scheduled_row(task, row)
         result = None
+        identity = {}
         events = []
         run_id = row.get('run_id')
         if run_id:
@@ -182,17 +217,25 @@ def summarize(wave_path, snapshot):
                 closure = event
                 break
         usable_status = result is not None and result['status'] in ('completed', 'deadline') and not result.get('issues')
-        reported_time = closure['elapsed_s'] if closure and not integrity and usable_status else None
+        guard_stderr = (cell/'stderr.log').read_bytes() if run_id else b''
+        resource_kind = resource_failure_kind(result, guard_stderr, identity=identity, events=events)
+        resource_closure_conflict = bool(resource_kind and (reported or accepted))
+        if resource_kind:
+            accepted = False
+            tproof = task['horizon_s']
+        reported_time = closure['elapsed_s'] if closure and not integrity and usable_status and not resource_kind else None
         native_guard_values = [event['checker_infeasible_columns'] for event in events
                                if event.get('checker_infeasible_columns') is not None]
         if any(type(value) is not int or value < 0 for value in native_guard_values):
             raise ValueError('Invalid native priced-column guard counter')
         native_guard_count = max(native_guard_values) if native_guard_values else None
-        guard_stderr = (wave_path/'cells'/run_id/'stderr.log').read_bytes() if run_id else b''
         guard_stderr_count = guard_stderr.count(b'M5.9: skipped checker-infeasible priced route')
         guard_warning = bool(native_guard_count) or guard_stderr_count > 0
         cells.append({**task, 'run_id': run_id, 'status': result['status'] if result else row.get('status','pending'),
-                      'resource_failure_kind': resource_failure_kind(result, guard_stderr),
+                      'resource_failure_kind': resource_kind,
+                      'resource_closure_conflict': resource_closure_conflict,
+                      'raw_accepted_proof_claim': proof.get('status') == 'accepted',
+                      'raw_native_closure_count': len(reported),
                       'completed_record': result is not None, 'finished_task': bool(row), **score,
                       'invalid_candidate_count': sum(not c.get('valid', False) for c in validation.get('candidates', [])),
                       'max_abs_native_checked_discrepancy': max((abs(c['native_minus_checked']) for c in validation.get('candidates', []) if c.get('native_minus_checked') is not None), default=0.),
@@ -221,7 +264,8 @@ def summarize(wave_path, snapshot):
         def avg(field):
             return statistics.mean(statistics.mean(c[field] for c in r) for r in by_instance.values())
         groups.append({'configuration': key, 'scheduled': len(rows), 'completed_records':sum(c['completed_record'] for c in rows),
-                       'memory_allocation_failures':sum(c['resource_failure_kind'] == 'memory_allocation_failure' for c in rows),
+                       'memory_allocation_failures':sum(c['resource_failure_kind'] in ('memory_allocation_failure', 'upstream_native_allocation_failure') for c in rows),
+                       'native_memory_limit_outcomes':sum(c['resource_failure_kind'] == 'native_memory_limit_reached' for c in rows),
                        'feasible':sum(c['final_checked_cost'] is not None for c in rows),
                        'reference_attained':sum(c['reference_attainment_s'] is not None for c in rows),
                        'invalid_candidate_count':sum(c['invalid_candidate_count'] for c in rows),
