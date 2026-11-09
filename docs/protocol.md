@@ -1,12 +1,12 @@
 # Experiment protocol
 
-Status: intermediate pilots complete and 1-hour pilot running. The main campaign awaits the global prefix/horizon decision and author review. This protocol distinguishes approved choices from proposals. Measured results are recorded separately in [the pilot report](ms56-phase2-results.md).
+Status: development pilots are complete. Both full 1-hour panels select prefix 15 s, and the completed focused pilot supports the recommended 7,200 s horizon, 16 GiB per process and 10 workers per host. The [main review](main-campaign-review.md) and [1,400-cell proposal](../configs/main-proposal.json) await author inspection. The proposal is nonlaunchable, and no main results exist. Measured evidence is recorded in the [full 16 GiB report](ms56-hour-pilot-16g.md) and [focused report](ms56-focused-pilot-16g.md).
 
 ## Preparation status
 
 The 5 arms and fixed prefix candidates are agreed, and the 56-reference snapshot is frozen, checked and published. The repository records the immutable v0.11 checker source and installed-source identity, the analysis dependency lock and the exact reference manifest digest. Reference checks are preparation evidence, not solver-performance results.
 
-The main campaign remains unlaunched. Source-pinned builds, process-launch instrumentation, interrupted-bound repair, closure diagnostics, the 12 pilot identities and matched effective backend settings are implemented and frozen per wave. The pilot must select one fixed prefix for the final full arm using the approved criterion below. Do not interpret the design configuration as a launchable main-campaign manifest. The computational-closure scope at the end of this document governs interpretation of the earlier proof terminology.
+The main campaign remains unlaunched. Source-pinned builds, process-launch instrumentation, interrupted-bound repair, closure diagnostics, the 12 pilot identities and matched effective backend settings are implemented and frozen per wave. The approved criterion below selects the fixed 15 s prefix for the final full arm. The concrete main proposal records the recommended horizon and resources while retaining `launchable: false`. Actual allocation and runtime binding remain future execution work after author inspection. The computational-closure scope at the end of this document governs interpretation of the earlier proof terminology.
 
 ## Approved scope
 
