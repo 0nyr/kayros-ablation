@@ -1,5 +1,7 @@
 # Completed 2-hour focused pilot at 16 GiB
 
+On 2026-11-09, Onyr reviewed this evidence and requested solver improvement before the main campaign. The [proof-speed follow-up](proof-speed-improvement-plan.md) supersedes the launch recommendation while preserving all measured outcomes below.
+
 The focused C104/RC202 pilot completed all 54 scheduled cells with 20 normal completions, 34 outer deadlines and no allocation failures, native memory-limit outcomes or invalid retained candidates. All 947 retained candidates pass the pinned v0.11 checker. There are 42 cells with a checked incumbent and 12 without one. Every scheduled cell remains in the metrics. The 2 allocation failures in the separate 8 GiB full panel remain valid results and are not replaced by this wave.
 
 We recommend a common 7,200 s main horizon from process launch, a 16 GiB per-process address-space cap and at most 10 workers per grvingt host. The global prefix remains 15 s, selected by the approved rule on the complete 12-instance, 1-hour panel. The 2 focused instances were selected after allocation failures, so their results provide targeted horizon and resource evidence. They neither replace the full-panel observations nor select a different global prefix.

@@ -1,5 +1,7 @@
 # Completed 1-hour pilot at 16 GiB
 
+On 2026-11-09, Onyr reviewed this evidence and requested solver improvement before the main campaign. The [proof-speed follow-up](proof-speed-improvement-plan.md) supersedes the launch recommendation while preserving all measured outcomes below.
+
 The second full panel completed all 324 cells under a 16 GiB per-process address-space cap: 153 normal wrapper exits and 171 outer deadlines, with no allocation failures, native memory-limit outcomes or invalid retained in-budget candidates. The controller reports no node failures. It uses the same 12 instances, 9 configurations, 3 trials, paired seeds, solver bytes, checker and frozen references as the 8 GiB panel. Each execution receives 3,600 s from process launch. Placement and concurrency changed, so differences between panels are descriptive resource-setting comparisons rather than an isolated causal effect of memory.
 
 ## Measured outcomes

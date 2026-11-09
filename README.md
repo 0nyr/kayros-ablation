@@ -2,7 +2,7 @@
 
 This repository studies Kayros's exact component and its cooperation with heuristic search for the Time-Dependent Vehicle Routing Problem with Time Windows (TDVRPTW). We compare the original Lera-Romero solver, Kayros's exact component with 2 Linear Programming (LP) backends, its standalone heuristic and a heuristic prefix followed by exact search. CPLEX is the main exact backend to match the original solver, independently of any presumed speed advantage. A separate cold Kayros arm uses HiGHS under otherwise matched parameters. Finer algorithmic ablations are outside the study's scope.
 
-Correctness probes and development pilots are complete. The [full 16 GiB pilot](docs/ms56-hour-pilot-16g.md) selects a global 15 s prefix, and the [focused 2-hour pilot](docs/ms56-focused-pilot-16g.md) supports a recommended 7,200 s horizon, 16 GiB per process and 10 workers per host. The [main review](docs/main-campaign-review.md) and [1,400-cell proposal](configs/main-proposal.json) are ready for author inspection. The proposal remains nonlaunchable, and the main campaign has not run. Synthetic examples remain distinct from measured pilot results.
+The completed pilots show improved anytime incumbent quality but a proof-speed gap against Lera-Romero. Onyr rejected the main-campaign launch recommendation on 2026-11-09. The [proof-speed improvement plan](docs/proof-speed-improvement-plan.md) now governs development, and the [current campaign status](configs/campaign-status.json) holds the main experiment until Kayros closes the gap and demonstrates improvement. The [full 16 GiB pilot](docs/ms56-hour-pilot-16g.md), [focused 2-hour pilot](docs/ms56-focused-pilot-16g.md), [main review](docs/main-campaign-review.md) and [nonlaunchable 1,400-cell proposal](configs/main-proposal.json) remain archived evidence. Their 15 s prefix and 7,200 s / 16 GiB configuration are starting points for the follow-up, not an approved launch. Synthetic examples remain distinct from measured results.
 
 ## Experiment scope
 
@@ -57,7 +57,7 @@ This writes a PDF, PNG and JSON summary. The costs and proof events are invented
 | `references/` | Frozen source witnesses, v0.11 reference solutions and validation records |
 | `outputs/` | Generated local outputs, ignored by Git |
 
-Solver binaries, licensed dependencies, full instance/ATF data and real solver-run outputs are not bundled. Reference solutions and their validation records are included. Input and reference identities are pinned in the snapshot manifest. Solver builds and instrumentation are frozen in per-wave manifests. The checked-in main proposal remains `launchable: false` pending author inspection and future allocation/runtime binding.
+Solver binaries, licensed dependencies, full instance/ATF data and real solver-run outputs are not bundled. Reference solutions and their validation records are included. Input and reference identities are pinned in the snapshot manifest. Solver builds and instrumentation are frozen in per-wave manifests. The checked-in main proposal remains `launchable: false` and is preserved with the source-pins file as a historical pilot snapshot. The current campaign-status record supersedes their readiness wording without changing their hashes.
 
 ## Sources and attribution
 
@@ -69,4 +69,4 @@ Code created in this repository is distributed under the [MIT license](LICENSE).
 
 ## Development probes
 
-The [pilot and proof specification](docs/pilot-proof-parameters.md) records the frozen 12-instance panel, matched settings and operational closure scope alongside the historical stricter proof record. `scripts/run_solver_probe.py` launches a single diagnostic cell with a pinned runtime manifest. It is not a campaign scheduler. Run the lightweight fixture tests with `python -m unittest discover -s tests`. Build and run solver probes on reserved compute nodes. The main campaign remains held for author inspection of the completed pilot evidence and recommendation.
+The [pilot and proof specification](docs/pilot-proof-parameters.md) records the frozen 12-instance panel, matched settings and operational closure scope alongside the historical stricter proof record. `scripts/run_solver_probe.py` launches a single diagnostic cell with a pinned runtime manifest. It is not a campaign scheduler. Run the lightweight fixture tests with `python -m unittest discover -s tests`. Build and run solver probes on reserved compute nodes. Follow the proof-speed plan before returning to main-campaign preparation.

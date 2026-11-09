@@ -1,6 +1,8 @@
-# Main-campaign readiness review
+# Archived main-campaign readiness review
 
-Status: both complete 1-hour panels select prefix 15 s under the approved rule. The [16 GiB report](ms56-hour-pilot-16g.md) covers all 324 cells, with no allocation failures or invalid retained candidates. Its 33-host allocation is released. The [focused 2-hour follow-up](ms56-focused-pilot-16g.md) completed all 54 cells at 16 GiB, with 20 normal completions, 34 deadlines and no resource failures or invalid retained candidates. These are separate experiments, not repairs or replacements of the valid 8 GiB observations. Expected resource failures remain measured outcomes and do not automatically veto readiness. We recommend 7,200 s, 16 GiB and 10 workers per host under a 47-host capacity scenario. Main launch remains held for the originally required author inspection. No main reservation has been submitted.
+Onyr rejected this launch recommendation on 2026-11-09. The pilots show an anytime benefit but do not establish the required Kayros proof-speed improvement over Lera-Romero. The [follow-up plan](proof-speed-improvement-plan.md) and [current campaign status](../configs/campaign-status.json) hold the main experiment for solver improvement and comparative validation. The recommendation and resource calculations below are preserved as historical preparation. No main reservation was submitted.
+
+Both complete 1-hour panels select prefix 15 s under the approved rule. The [16 GiB report](ms56-hour-pilot-16g.md) covers all 324 cells, with no allocation failures or invalid retained candidates. Its 33-host allocation is released. The [focused 2-hour follow-up](ms56-focused-pilot-16g.md) completed all 54 cells at 16 GiB, with 20 normal completions, 34 deadlines and no resource failures or invalid retained candidates. These are separate experiments, not repairs or replacements of the valid 8 GiB observations. Expected resource failures remain measured outcomes. The rejected launch proposal used 7,200 s, 16 GiB and 10 workers per host under a 47-host capacity scenario.
 
 ## Authorized resource follow-ups
 
@@ -28,7 +30,7 @@ The [RC105 guard assessment](ms56-rc105-guard.md) records a native rejected-colu
 | Common horizon | Recommended 7,200 s from process launch | Focused same-execution checkpoints add 13 closures and 17 improving cells, including 2 first-feasible cells. All new closures occur on C104. |
 | Memory cap and workers per node | Recommended 16 GiB × 10 workers | Focused observed VmPeak reaches 10.798 GiB with usable coverage for all 54 cells and no resource failures. Full-panel coverage remains 210/324, with an observed maximum of 10.734 GiB. |
 | Full schedule | 56 instances × 5 arms × 5 trials = 1,400 cells | [Concrete nonlaunchable proposal](../configs/main-proposal.json) prepared. Actual allocation and runtime binding remain future execution work. |
-| Main launch | Held for author inspection of pilot plots and recommendation | Pilot evidence is complete. No further pilot is required for this recommendation. |
+| Main launch | Held for Kayros proof-speed improvement by author decision | Diagnose and improve the exact engine, validate full Kayros against fixed Lera, and review a revised design before launch. |
 
 The focused second hour adds 13 closures, all on C104. RC202 full-arm endpoint gaps do not improve during that interval, while its 3 standalone ILS trials do improve. Lower normalized Λ alone may reflect startup dilution. The focused cohort supports the common horizon recommendation without being pooled into the full panel or retuning its global prefix.
 

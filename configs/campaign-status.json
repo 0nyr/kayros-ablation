@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "updated_date": "2026-11-09",
+  "status": "held_for_kayros_proof_speed_improvement",
+  "main_launch_authorized": false,
+  "decision_source": "Author rejected the pilot-based launch recommendation and requested Kayros proof-speed improvement before resuming the main experiment.",
+  "plan": "docs/proof-speed-improvement-plan.md",
+  "archived_proposal": {
+    "path": "configs/main-proposal.json",
+    "sha256": "250b85db0556f6cb20ff0e9ba3868c013201a5e1edf8fd3893191376fb80fba5",
+    "status": "launch_recommendation_rejected_preserved_as_evidence"
+  },
+  "archived_source_pins": {
+    "path": "configs/source_pins.json",
+    "sha256": "b0ffeda22cd1baaa8cf9fa53c96b39f04e51b94fc7e1a105bdbe239261da31dd",
+    "status": "historical_pilot_snapshot"
+  },
+  "resume_conditions": [
+    "Identify and close Kayros's measured proof-speed gap against the fixed original Lera-Romero baseline.",
+    "Demonstrate improvement under a comparison design fixed before confirmation, preserving unfavorable outcomes and the anytime comparison.",
+    "Review the resulting evidence and updated main design with the author before launch."
+  ],
+  "development_authorized": true,
+  "development_started_in_handoff": false,
+  "note": "This is a decision record, not an execution lock. The existing distributed driver does not read this file."
+}
