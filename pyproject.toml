@@ -1,0 +1,12 @@
+[project]
+name = "kayros-ablation"
+version = "0.1.0"
+description = "Experiment protocol and analysis for Kayros exact-component ablation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Florian Rascoussier" }]
+dependencies = ["matplotlib>=3.9,<4"]
+
+[tool.uv]
+package = false
