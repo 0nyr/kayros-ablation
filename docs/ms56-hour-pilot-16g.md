@@ -20,6 +20,22 @@ Every configuration retains 36 scheduled cells. Trial averages are formed within
 
 The 148 reported closures include 3 RC105 HiGHS observations with the previously diagnosed native rejected-column warning. They retain that qualification. The remaining guard observations are timeouts and receive no closure credit.
 
+The additional [raw-gap attainment figure](../outputs/ms56-phase3/repeat3600-16g-seeds3/analysis/raw-gap-targets/raw-gap-attainment.png) covers the frozen 0%, 1% and 5% targets. Every endpoint below has 36 scheduled cells. The 0% target means literal reference attainment under the pinned checked-cost contract, without an added tolerance or proof implication. Small signed floating-point differences remain visible in that definition.
+
+| Configuration | Raw gap ≤ 0% | Raw gap ≤ 1% | Raw gap ≤ 5% |
+|---|---:|---:|---:|
+| Original Lera CPLEX | 24 | 27 | 27 |
+| Cold Kayros CPLEX | 21 | 24 | 24 |
+| Cold Kayros HiGHS | 18 | 18 | 18 |
+| Standalone ILS | 12 | 30 | 36 |
+| Full Kayros, prefix 15 s | 21 | 25 | 36 |
+| Full Kayros, prefix 60 s | 24 | 26 | 36 |
+| Full Kayros, prefix 180 s | 24 | 29 | 36 |
+| Full Kayros, prefix 600 s | 23 | 33 | 36 |
+| Full Kayros, prefix 1800 s | 22 | 33 | 36 |
+
+All heuristic-containing configurations attain the 5% target in every cell. The tighter targets expose the previously reported quality trade-off, including Lera's higher 0% and 1% endpoint counts than full15. The figure was generated on reserved grvingt-25 core 62, with PDF and exact plot data beside the PNG. Its input is an analysis-only copy of the verified archive. No solver was rerun. The plotting implementation verifies scheduled identities, checker/reference bindings and event/native artifact digests before aggregation.
+
 ## Prefix decision and scientific interpretation
 
 The approved ordering again selects 15 s: restricted mean closure time first, mean Λ on an exact tie, then the shorter prefix. The ranking is 15, 60, 180, 600, 1800 s. Prefix 15 wins all 12 leave-one-instance-out comparisons and repetitions 2 and 3. Prefix 180 wins repetition 1 by 6.294 s in the restricted mean. Hence the global recommendation is stable to omitting one instance, but it is not unanimous across replications. Prefix 180 also has 20 closures versus 19 for prefix 15, so the selected prefix does not maximize closure count.
