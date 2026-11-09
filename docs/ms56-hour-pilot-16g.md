@@ -50,7 +50,7 @@ Relative to the valid 8 GiB panel, the total closure count rises from 143 to 148
 
 The last quarter of the full pilot contains 6 additional HiGHS closures, 1 full15 closure, 2 full180 closures and 1 full600 closure. Standalone ILS improves its checked incumbent in 4 cells during that quarter. These observations show that the full 1-hour panel is not uniformly stagnant, but they cannot establish what happens after its deadline.
 
-The separate 54-cell C104/RC202 pilot continues to 7,200 s under the same 16 GiB cap. Its completed trajectories will distinguish genuine second-hour improvements and closures from the dilution of startup cost in normalized Λ. It will remain separate from the complete 12-instance aggregates. The common main horizon and final resource recommendation await this evidence. Main launch remains subject to author inspection.
+The [completed 54-cell C104/RC202 pilot](ms56-focused-pilot-16g.md) reached 7,200 s under the same 16 GiB cap, with 20 normal completions, 34 deadlines and no resource failures or invalid retained candidates. Its second hour adds 13 computational closures, all on C104. Its trajectories distinguish genuine later progress from startup dilution and remain separate from the complete 12-instance aggregates. The recommendation is a common 7,200 s horizon, 16 GiB and 10 workers per host, with a 47-host capacity scenario in the [nonlaunchable main proposal](../configs/main-proposal.json). Main launch remains held for author inspection.
 
 ## Memory observations
 
@@ -66,7 +66,7 @@ R202 full/prefix180/trial3 has 11 distinct rejected generated routes and times o
 
 ## Artifacts and reservation
 
-Abaca job 7012887 used 33 grvingt hosts with at most 10 workers each. At 12:32:26 CET, the sealed wave had 324 results, zero workers/native children and complete RSS/virtual observers. The allocation was then released. The separate 6-host focused job 7012889 remains active. Main analysis and plots ran on unused core 62 of reserved grvingt-25, outside the focused solver cores.
+Abaca job 7012887 used 33 grvingt hosts with at most 10 workers each. At 12:32:26 CET, the sealed wave had 324 results, zero workers/native children and complete RSS/virtual observers. The allocation was then released. The separate 6-host focused job 7012889 has completed its pilot, and allocation release has been requested. Main analysis and plots ran on unused core 62 of reserved grvingt-25, outside the focused solver cores.
 
 The raw wave is `outputs/ms56-phase3/repeat3600-16g-seeds3/`, with wave SHA-256 `42bf4a5b64db44e1666a85ca7b08a4a3d4e2cacd96794f9c5f278fb762a6d254`. All 3,093 raw files and 81,988,388 bytes are locally verified by SHA-256 and size, separately from derived `analysis/` extras. The adjacent `.local-verification.json` and `.recovery-audit.json` receipts record zero transfer mismatches and all 324 terminal identities passing recovery checks, with no orphaned cells or runtime-manifest errors. One unreadable partial artifact had its original mode recorded before owner-read permission was added for archival. No content was changed. The verified remote raw wave and its transferred tar were then deleted. The focused wave and required runtime/input/checker caches remain intact.
 
