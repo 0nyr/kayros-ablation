@@ -2,6 +2,12 @@
 
 Status: design in progress. This protocol distinguishes approved choices from proposals. It contains no measured solver results.
 
+## Preparation status
+
+The 5 arms and fixed prefix candidates are agreed, and the 56-reference snapshot is frozen, checked and published. The repository records the immutable v0.11 checker source and installed-source identity, the analysis dependency lock and the exact reference manifest digest. Reference checks are preparation evidence, not solver-performance results.
+
+The campaign remains unlaunched. Solver builds and their patches, process-launch instrumentation, global-bound events, the 12 pilot identities, matched LP/backend parameters and detailed proof-acceptance checks remain to implement or specify. The pilot must select one fixed prefix for the final full arm using a prespecified criterion. Do not interpret the draft configuration as a launchable campaign manifest.
+
 ## Approved scope
 
 Use Kayros v1.6.1 with separately documented necessary fixes, the original upstream Lera-Romero source, and classic mamut-routing-lib v0.11.0 for all cost evaluation. Main performance comparisons use the 56 original Dabia2013 TDVRPTW instances with 100 customers and the Duration objective. Preserve the materialized original distance/speed conventions and verify representation equivalence across solver adapters.
@@ -10,7 +16,7 @@ Compare 5 arms: original Lera-Romero exact solver with CPLEX, cold Kayros exact 
 
 Use CPLEX for the main exact comparisons to match the original solver's backend. This is a choice of experimental control, not a claim that CPLEX is faster. The additional cold Kayros HiGHS arm isolates backend replacement with matched algorithmic parameters, cut settings, thread limits and comparable numerical settings. Record backend-specific settings and any unavoidable differences. No algorithmic addition bundles, finer component ablations or separate cut-setting interventions are planned. Provenance documentation still distinguishes reused methods/code, adaptations, correctness repairs and new components. Known incorrect variants can supply regression evidence but cannot receive successful proof credit.
 
-Initial correctness tests may use n25/n50 subsets, with 1 or 3 trials. A 1-hour pilot on 12 n100 instances precedes a provisional 2-hour main campaign on all 56. Main arms have 5 trials per instance. Use 5 actual ILS seeds for heuristic and full arms, paired by trial. Record cold exact trials as timing replications where the API has no random-seed control. Do not claim that changing a metadata seed changes a deterministic algorithm. The actual seed identifiers will be frozen in the manifest.
+Initial correctness tests may use n25/n50 subsets, with 1 or 3 trials. A 1-hour pilot on 12 n100 instances precedes a provisional 2-hour main campaign on all 56. Main arms have 5 trials per instance. The configuration fixes the ILS seeds to 42, 123, 456, 789 and 2026, paired between heuristic and full arms. Record cold exact trials as timing replications where the API has no random-seed control. Do not claim that changing a metadata seed changes a deterministic algorithm.
 
 With 5 arms, 56 instances and 5 trials, the final design has 1,400 cells and at most 2,800 solver core-hours at a 2-hour horizon. This counts one selected full-arm prefix configuration. The pilot's prefix comparison is additional development work.
 
@@ -58,6 +64,8 @@ Preserve streamed candidate routes and timestamps, native and checked objective 
 
 1. Prespecify how the 5 fixed prefixes and accepted proof outcomes select one global final configuration, including a tie rule and the incumbent-quality trade-off.
 2. Complete the detailed cross-solver proof-acceptance checks and matched backend parameter manifest before launch.
+
+The runner specification must also state whether the prefix deadline is measured from process launch or heuristic-stage entry. Whichever phase boundary is selected, all setup and handoff work remains inside the common process-launch horizon.
 
 Process-launch timing, the pre-pilot reference policy, the 5-arm design, fixed prefix scheduling and exclusion of finer algorithmic ablations are settled. The reference snapshot is frozen and independently replayed. Campaign consumers must retain its pinned identity.
 
