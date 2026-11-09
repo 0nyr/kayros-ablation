@@ -94,6 +94,7 @@ def run_probe(*, output: Path, manifest: dict, parameters: dict,
     issues: list[str] = []
     status = "completed"
     returncode = None
+    sampled_peak_rss_kib = 0
     with (cell / "events.jsonl").open("xb") as event_file, (cell / "stderr.log").open("xb") as stderr, (cell / "late-events.jsonl").open("xb") as late_file:
         # This timestamp directly precedes Popen, charging process creation too.
         start_ns = time.monotonic_ns()
@@ -152,6 +153,12 @@ def run_probe(*, output: Path, manifest: dict, parameters: dict,
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
                 while selector.get_map():
+                    try:
+                        for entry in Path(f"/proc/{process.pid}/status").read_text().splitlines():
+                            if entry.startswith("VmHWM:"):
+                                sampled_peak_rss_kib = max(sampled_peak_rss_kib, int(entry.split()[1]))
+                    except (OSError, ValueError):
+                        pass
                     remaining = (deadline_ns - time.monotonic_ns()) / 1e9
                     if remaining <= 0:
                         status = "deadline"
@@ -223,6 +230,8 @@ def run_probe(*, output: Path, manifest: dict, parameters: dict,
               "manifest_hash": manifest_hash, "identity_hash": digest(identity),
               "status": status, "returncode": returncode,
               "solver_elapsed_s": solver_elapsed_s,
+              "sampled_solver_peak_rss_kib": sampled_peak_rss_kib,
+              "rss_measurement": "Linux solver-process VmHWM sampled while stdout is open; short-lived peaks may be missed",
               "timeout_overshoot_s": max(0.0, solver_elapsed_s - horizon_s), "issues": issues,
               "event_count": len(events), "late_event_count": len(late_events),
               "late_events_sha256": hashlib.sha256((cell / "late-events.jsonl").read_bytes()).hexdigest(),

@@ -88,16 +88,25 @@ def summarize(wave_path, snapshot):
             raise ValueError('Invalid accepted proof timestamp')
         reported = [e for e in events if e['event'] == 'closure']
         integrity = [e for e in events if e['event'] == 'integrity']
-        closure = next((e for e in reported if any(p['elapsed_s'] <= e['elapsed_s'] for p in envelope)), None)
-        reported_time = closure['elapsed_s'] if closure and not integrity else None
+        checks = {c['sequence']: c for c in validation.get('candidates', [])}
+        closure = None
+        for event in reported:
+            previous = [e for e in events if e['event'] == 'candidate' and e['sequence'] < event['sequence']]
+            if previous and checks.get(previous[-1]['sequence'], {}).get('valid') is True:
+                closure = event
+                break
+        usable_status = result is not None and result['status'] in ('completed', 'deadline') and not result.get('issues')
+        reported_time = closure['elapsed_s'] if closure and not integrity and usable_status else None
         cells.append({**task, 'run_id': run_id, 'status': result['status'] if result else row.get('status','pending'),
                       'completed_record': result is not None, 'finished_task': bool(row), **score,
+                      'invalid_candidate_count': sum(not c.get('valid', False) for c in validation.get('candidates', [])),
+                      'max_abs_native_checked_discrepancy': max((abs(c['native_minus_checked']) for c in validation.get('candidates', []) if c.get('native_minus_checked') is not None), default=0.),
                       'native_closure_unverified': proof.get('status') == 'proof_unverified',
                       'accepted_proof': accepted, 'capped_proof_s': tproof,
                       'reported_closure_with_checked_witness': reported_time is not None,
                       'reported_closure_s': reported_time,
                       'capped_reported_closure_s': task['horizon_s'] if reported_time is None else reported_time,
-                      'closure_diagnostics': closure.get('closure_census', {}) if closure else {},
+                      'closure_diagnostics': (closure.get('closure_census') or {k: closure[k] for k in ('cg_optimum_count', 'certified_cg_optimum_count', 'restricted_master_infeasible', 'unbranched_fractional') if k in closure}) if closure else {},
                       'peak_rss_kib': result.get('sampled_solver_peak_rss_kib') if result else None,
                       'timeout_overshoot_s': result.get('timeout_overshoot_s') if result else None})
     grouped = {}
@@ -114,6 +123,8 @@ def summarize(wave_path, snapshot):
         groups.append({'configuration': key, 'scheduled': len(rows), 'completed_records':sum(c['completed_record'] for c in rows),
                        'feasible':sum(c['final_checked_cost'] is not None for c in rows),
                        'reference_attained':sum(c['reference_attainment_s'] is not None for c in rows),
+                       'invalid_candidate_count':sum(c['invalid_candidate_count'] for c in rows),
+                       'max_abs_native_checked_discrepancy':max(c['max_abs_native_checked_discrepancy'] for c in rows),
                        'native_closures_unverified':sum(c['native_closure_unverified'] for c in rows),
                        'accepted_proofs':sum(c['accepted_proof'] for c in rows),
                        'reported_closures_with_checked_witness':sum(c['reported_closure_with_checked_witness'] for c in rows),

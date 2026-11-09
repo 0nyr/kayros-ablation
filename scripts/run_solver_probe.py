@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--prefix-seconds", type=float)
     parser.add_argument("--memory-mb", type=int, required=True)
     parser.add_argument("--repetition", type=int, default=0)
+    parser.add_argument("--cpu-core", type=int)
     args = parser.parse_args()
     heuristic_arm = args.arm in {"kayros-heuristics", "kayros-full-cplex"}
     if heuristic_arm and args.seed is None:
@@ -52,15 +53,33 @@ def main():
     for filename, expected in {**runtime_files, **patch_files}.items():
         if sha256(Path(filename)) != expected:
             raise RuntimeError(f"Probe artifact identity mismatch: {filename}")
-    query = "import importlib.metadata as m,json; d=m.distribution('kayros'); print(json.dumps([str(d.locate_file(p).resolve()) for p in d.files if str(p).endswith(('.so','.py'))]))"
-    installed_modules = json.loads(subprocess.check_output([str(worker_python), "-c", query], text=True))
+    runtime_kind = manifest.get("runtime_kind", "kayros")
     declared_paths = {str(Path(filename).resolve()) for filename in runtime_files}
-    if not installed_modules or not set(installed_modules) <= declared_paths:
-        raise RuntimeError("Probe manifest does not pin every installed Kayros Python module and extension")
+    worker_environment = manifest.get("worker_environment", {})
+    if (not isinstance(worker_environment, dict)
+            or any(not key.startswith("UPSTREAM_") or not isinstance(value, str)
+                   for key, value in worker_environment.items())):
+        raise RuntimeError("Worker environment supports explicit UPSTREAM_ settings only")
+    if runtime_kind == "kayros":
+        if args.arm not in {"kayros-bpca-cplex", "kayros-bpca-highs", "kayros-heuristics", "kayros-full-cplex"}:
+            raise RuntimeError("Kayros runtime requires a declared Kayros arm")
+        query = "import importlib.metadata as m,json; d=m.distribution('kayros'); print(json.dumps([str(d.locate_file(p).resolve()) for p in d.files if str(p).endswith(('.so','.py'))]))"
+        installed_modules = json.loads(subprocess.check_output([str(worker_python), "-c", query], text=True))
+        if not installed_modules or not set(installed_modules) <= declared_paths:
+            raise RuntimeError("Probe manifest does not pin every installed Kayros Python module and extension")
+    elif runtime_kind == "native":
+        binary = worker_environment.get("UPSTREAM_PROBE_BINARY")
+        if args.arm != "lera-exact" or not binary or str(Path(binary).resolve()) not in declared_paths:
+            raise RuntimeError("Native upstream runtime requires its pinned executable and lera-exact arm")
+    else:
+        raise RuntimeError("Unknown runtime_kind")
     inputs = {"instance_name": instance["instance_name"],
               "instance_sha256": sha256(instance_path), "atf_sha256": sha256(atf_path)}
-    selected_core = min(os.sched_getaffinity(0))
-    environment = dict(os.environ, OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1",
+    allowed_cores = os.sched_getaffinity(0)
+    selected_core = min(allowed_cores) if args.cpu_core is None else args.cpu_core
+    if selected_core not in allowed_cores:
+        parser.error("Requested CPU core is outside this process affinity")
+    environment = dict(os.environ, **worker_environment, OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1",
                        PROBE_CPU_AFFINITY=str(selected_core))
     orchestration_files = {name: sha256(Path(__file__).with_name(name)) for name in
                            ["run_solver_probe.py", "probe_runner.py", "validate_probe.py", "checker_contract.py"]}

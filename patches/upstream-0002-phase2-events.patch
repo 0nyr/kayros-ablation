@@ -1,0 +1,330 @@
+diff --git a/code/goc/src/linear_programming/colgen/colgen.cpp b/code/goc/src/linear_programming/colgen/colgen.cpp
+index ec865ba..c12faed 100644
+--- a/code/goc/src/linear_programming/colgen/colgen.cpp
++++ b/code/goc/src/linear_programming/colgen/colgen.cpp
+@@ -86,8 +86,10 @@ CGExecutionLog solve_colgen(Formulation* formulation,
+ 	// If the column generation was solved to optimality, get the actual solution.
+ 	if (*execution_log.status == CGStatus::Optimum)
+ 	{
+-		lp_solver->time_limit = Duration::Max();
++		lp_solver->time_limit = time_limit-rolex.Peek();
++		if (lp_solver->time_limit <= 0.0_sec) { execution_log.status=CGStatus::TimeLimitReached; execution_log.time=rolex.Peek(); return execution_log; }
+ 		auto lp_log = lp_solver->Solve(formulation, {LPOption::Incumbent});
++		if (*lp_log.status != LPStatus::Optimum) { execution_log.status=parse_lp_status(*lp_log.status); execution_log.time=rolex.Peek(); return execution_log; }
+ 		execution_log.incumbent_value = lp_log.incumbent_value;
+ 		execution_log.incumbent = lp_log.incumbent;
+ 	}
+diff --git a/code/goc/src/linear_programming/cplex/cplex_solver.cpp b/code/goc/src/linear_programming/cplex/cplex_solver.cpp
+index e296d89..15acf94 100644
+--- a/code/goc/src/linear_programming/cplex/cplex_solver.cpp
++++ b/code/goc/src/linear_programming/cplex/cplex_solver.cpp
+@@ -5,6 +5,7 @@
+ //
+ 
+ #include <mutex>
++#include "ms56_events.h"
+ 
+ #include "goc/collection/collection_utils.h"
+ #include "goc/string/string_utils.h"
+@@ -54,11 +55,26 @@ void untunnel_cplex_logs(CplexFormulation* formulation, const vector<ostream*>&
+ 	cplex::delfuncdest(formulation->Environment(), log, (void*) &streams, tunnel_message);
+ }
+ 
++void ms56_observe(CplexFormulation* formulation,const std::string& kind) {
++    static std::map<std::string,int> calls;
++    ++calls[kind];
++    if(calls[kind]!=1) return;
++    json values;
++    for(auto option: std::vector<std::pair<std::string,int>>{{"threads",CPX_PARAM_THREADS},{"lp_method",CPX_PARAM_LPMETHOD},{"presolve",CPX_PARAM_PREIND},{"reduction",CPX_PARAM_REDUCE},{"scaling",CPX_PARAM_SCAIND},{"parallel",CPX_PARAM_PARALLELMODE},{"random_seed",CPX_PARAM_RANDOMSEED}}) { int v=0; cplex::getintparam(formulation->Environment(),option.second,&v);values[option.first]=v; }
++    for(auto option: std::vector<std::pair<std::string,int>>{{"primal_feasibility",CPX_PARAM_EPRHS},{"dual_feasibility",CPX_PARAM_EPOPT},{"integrality",CPX_PARAM_EPINT},{"mip_relative_gap",CPX_PARAM_EPGAP}}) { double v=0; cplex::getdblparam(formulation->Environment(),option.second,&v);values[option.first]=v; }
++    ms56::emit({{"event","phase"},{"phase","backend_settings"},{"backend","CPLEX"},{"version",CPXversion(formulation->Environment())},{"solve_kind",kind},{"effective",values}});
++}
++
+ // Applies the configuration parameters specified in the config json to CPLEX environment.
+ void apply_configuration(CplexFormulation* formulation, const json& config)
+ {
+ 	// Reset parameters of the formulation to the default values.
+ 	cplex::setdefaults(formulation->Environment());
++    cplex::setintparam(formulation->Environment(),CPX_PARAM_THREADS,1);
++    cplex::setdblparam(formulation->Environment(),CPX_PARAM_EPRHS,1e-7);
++    cplex::setdblparam(formulation->Environment(),CPX_PARAM_EPOPT,1e-7);
++    cplex::setdblparam(formulation->Environment(),CPX_PARAM_EPINT,1e-6);
++    cplex::setdblparam(formulation->Environment(),CPX_PARAM_EPGAP,0.0);
+ 	
+ 	// Add new parameters.
+ 	for (auto it_param = config.begin(); it_param != config.end(); ++it_param)
+@@ -464,6 +480,7 @@ LPExecutionLog solve_lp(CplexFormulation* formulation, ostream* screen_output, D
+ 	
+ 	// Optimize.
+ 	Stopwatch rolex(true);
++	ms56_observe(formulation,"LP");
+ 	cplex::lpopt(formulation->Environment(), formulation->Problem());
+ 	rolex.Pause();
+ 	
+@@ -531,6 +548,7 @@ BCExecutionLog solve_bc(CplexFormulation* formulation, ostream* screen_output, D
+ 	
+ 	// Optimize.
+ 	Stopwatch rolex(true);
++	ms56_observe(formulation,"MIP");
+ 	cplex::mipopt(formulation->Environment(), formulation->Problem());
+ 	rolex.Pause();
+ 	
+diff --git a/code/include/bcp/bcp.h b/code/include/bcp/bcp.h
+index f05c5f4..9bf1531 100644
+--- a/code/include/bcp/bcp.h
++++ b/code/include/bcp/bcp.h
+@@ -24,6 +24,9 @@ public:
+ 	int node_limit;
+ 	int cut_limit;
+ 	BCPPricingFunction pricing_solver;
++	bool final_pricing_complete = false;
++	int cg_optimum_count = 0, certified_cg_optimum_count = 0;
++	int restricted_master_infeasible = 0, unbranched_fractional = 0;
+ 	
+ 	// Initializes the Branch cut and price solver.
+ 	// 	D: digraph that the VRP is based on.
+diff --git a/code/include/ms56_events.h b/code/include/ms56_events.h
+new file mode 100644
+index 0000000..1104161
+--- /dev/null
++++ b/code/include/ms56_events.h
+@@ -0,0 +1,29 @@
++#pragma once
++#include <chrono>
++#include <cstdlib>
++#include <iostream>
++#include <algorithm>
++#include <goc/goc.h>
++namespace ms56 {
++inline long long now_ns() { return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
++inline double elapsed() { const char* p = std::getenv("PROBE_START_MONOTONIC_NS"); return p ? (now_ns()-std::stoll(p))/1e9 : 0.0; }
++inline double remaining() { const char* p = std::getenv("PROBE_DEADLINE_MONOTONIC_NS"); return p ? std::max(0.0,(std::stoll(p)-now_ns())/1e9) : 0.0; }
++inline void emit(nlohmann::json event) { event["elapsed_s"]=elapsed(); std::cout << event << std::endl; }
++inline void candidate(const goc::VRPSolution& solution, const std::string& origin) {
++    nlohmann::json routes=nlohmann::json::array();
++    const char* end_text=std::getenv("UPSTREAM_EXPECTED_END_DEPOT");
++    int end=end_text ? std::stoi(end_text) : -1;
++    for (const auto& route: solution.routes) {
++        if(route.path.size()<3 || route.path.front()!=0 || route.path.back()!=end) {
++            emit({{"event","integrity"},{"reason","invalid_native_route_depot_mapping"}}); return;
++        }
++        for(size_t k=1;k+1<route.path.size();++k) if(route.path[k]<=0 || route.path[k]>=end) {
++            emit({{"event","integrity"},{"reason","invalid_native_customer_mapping"}}); return;
++        }
++        std::vector<int> customers;
++        for (size_t k=1;k+1<route.path.size();++k) customers.push_back(route.path[k]);
++        routes.push_back(customers);
++    }
++    emit({{"event","candidate"},{"phase","exact"},{"origin",origin},{"native_cost",solution.value},{"routes",routes},{"routes_format","mamut-customers"}});
++}
++}
+diff --git a/code/src/bcp/bcp.cpp b/code/src/bcp/bcp.cpp
+index 4d0420a..56bed53 100644
+--- a/code/src/bcp/bcp.cpp
++++ b/code/src/bcp/bcp.cpp
+@@ -5,6 +5,7 @@
+ //
+ 
+ #include "bcp/bcp.h"
++#include "ms56_events.h"
+ 
+ #include <climits>
+ 
+@@ -33,8 +34,9 @@ BCP::BCP(const Digraph& D, SPF* spf) : D(D), spf(spf), z_lb(-INFTY), z_ub(INFTY)
+ 			int cuts_added = 0;
+ 			while (this->spf->cuts.size() < cut_limit)
+ 			{
++				if (ms56::remaining()<=0) {cg_execution_log->status=CGStatus::TimeLimitReached;break;}
+ 				Stopwatch cut_rolex(true);
+-				lp_solver.time_limit = time_limit - iteration_rolex.Peek();
++				lp_solver.time_limit = Duration(std::max(0.0,ms56::remaining()),DurationUnit::Seconds);
+ 				auto lp_log = lp_solver.Solve(this->spf->formulation, {LPOption::Incumbent});
+ 				if (lp_log.status != LPStatus::Optimum) break;
+ 				bool added_cuts = SeparateCuts(lp_log.incumbent);
+@@ -74,6 +76,7 @@ BCPExecutionLog BCP::Run(VRPSolution* solution)
+ 	Node* root = new Node{0, INFTY, {}};
+ 	ProcessNode(root);
+ 	log.root_time = rolex.Peek();
++	if (log.root_lp_value.IsSet()) { z_lb=*log.root_lp_value; ms56::emit({{"event","bound"},{"phase","exact"},{"source","root_complete"},{"bound_validity","native_model_audit_pending"},{"global_lb",z_lb}}); }
+ 
+ 	if (!q.empty())
+ 	{
+@@ -89,6 +92,7 @@ BCPExecutionLog BCP::Run(VRPSolution* solution)
+ 		while (!q.empty())
+ 		{
+ 			if (log.status == BCStatus::TimeLimitReached || log.status == BCStatus::MemoryLimitReached) break;
++			if (ms56::remaining() <= 0) { log.status=BCStatus::TimeLimitReached; break; }
+ 			if (log.nodes_closed >= node_limit) { log.status = BCStatus::NodeLimitReached; break; }
+ 			
+ 			// Pop node.
+@@ -105,9 +109,10 @@ BCPExecutionLog BCP::Run(VRPSolution* solution)
+ 				// Output to console.
+ 				if (tstream.RegisterAttempt()) tstream.WriteRow({STR(rolex.Peek()), STR(log.nodes_closed), STR(log.nodes_open), STR(z_lb), STR(z_ub), STR(spf->formulation->VariableCount())});
+ 			}
++			if (log.status == BCStatus::DidNotStart && !q.empty()) { z_lb=std::max(z_lb,std::min(z_ub,q.top()->bound)); ms56::emit({{"event","bound"},{"phase","exact"},{"source","frontier"},{"bound_validity","native_model_audit_pending"},{"global_lb",z_lb}}); }
+ 			delete n;
+ 		}
+-		if (q.empty()) z_lb = z_ub;
++		if (q.empty() && log.status == BCStatus::DidNotStart) z_lb = z_ub;
+ 		
+ 		tstream.WriteRow({STR(rolex.Peek()), STR(log.nodes_closed), STR(log.nodes_open), STR(z_lb), STR(z_ub), STR(spf->formulation->VariableCount())});
+ 		
+@@ -122,6 +127,7 @@ BCPExecutionLog BCP::Run(VRPSolution* solution)
+ 		z_lb = z_ub;
+ 	}
+ 	log.time = rolex.Peek();
++	ms56::emit({{"event",log.status==BCStatus::Optimum && z_ub<INFTY ? "closure":"phase"},{"phase","exact_terminated"},{"status",STR(log.status)},{"proof_acceptance","unverified"},{"restricted_master_infeasible",restricted_master_infeasible},{"unbranched_fractional",unbranched_fractional},{"cg_optimum_count",cg_optimum_count},{"certified_cg_optimum_count",certified_cg_optimum_count},{"global_lb",z_lb>-INFTY && z_lb<INFTY ? nlohmann::json(z_lb):nlohmann::json(nullptr)}});
+ 	
+ 	// Set bounds and solutions found.
+ 	if (z_ub != INFTY) log.best_int_value = z_ub;
+@@ -141,7 +147,11 @@ BCPExecutionLog BCP::Run(VRPSolution* solution)
+ double BCP::EstimateBound(Node* node)
+ {
+ 	spf->SetForbiddenArcs(node->A);
++	lp_solver.time_limit=Duration(std::max(0.0,ms56::remaining()),DurationUnit::Seconds);
+ 	auto lp_log = lp_solver.Solve(spf->formulation);
++	if (lp_log.status == LPStatus::TimeLimitReached) log.status=BCStatus::TimeLimitReached;
++	if (lp_log.status == LPStatus::MemoryLimitReached) log.status=BCStatus::MemoryLimitReached;
++	if(lp_log.status==LPStatus::Infeasible) ++restricted_master_infeasible;
+ 	return lp_log.status == LPStatus::Optimum ? *lp_log.incumbent_value : INFTY;
+ }
+ 
+@@ -150,7 +160,8 @@ void BCP::ProcessNode(Node* node)
+ 	node_seq++;
+ 	spf->SetForbiddenArcs(node->A);
+ 	cg_solver.screen_output = node->index == 0 ? &clog : nullptr;
+-	cg_solver.time_limit = time_limit - rolex.Peek();
++	cg_solver.time_limit = Duration(std::max(0.0,ms56::remaining()),DurationUnit::Seconds);
++	final_pricing_complete=false;
+ 	auto cg_log = cg_solver.Solve(spf->formulation, {CGOption::IterationsInformation});
+ 	
+ 	*log.lp_time += cg_log.lp_time;
+@@ -158,6 +169,8 @@ void BCP::ProcessNode(Node* node)
+ 	// Update node.
+ 	if (cg_log.status == CGStatus::Optimum)
+ 	{
++		++cg_optimum_count;
++		if (final_pricing_complete) ++certified_cg_optimum_count;
+ 		node->bound = cg_log.incumbent_value;
+ 		node->opt = *cg_log.incumbent;
+ 	}
+@@ -188,6 +201,7 @@ void BCP::ProcessNode(Node* node)
+ 	}
+ 	else if (cg_log.status == CGStatus::Infeasible)
+ 	{
++		++restricted_master_infeasible;
+ 		log.nodes_closed++;
+ 		delete node;
+ 	}
+@@ -200,6 +214,7 @@ void BCP::ProcessNode(Node* node)
+ 			{
+ 				z_ub = node->bound;
+ 				ub = node->opt;
++				ms56::candidate(VRPSolution(z_ub,spf->InterpretSolution(ub)),"BCP");
+ 			}
+ 			log.nodes_closed++;
+ 			delete node;
+@@ -242,12 +257,14 @@ void BCP::BranchNode(Node* node)
+ 	
+ 	// Calculate all candidate estimate bounds and keep the best one.
+ 	vector<Node> best_candidate;
++	if(x_most.empty()) ++unbranched_fractional;
+ 	if (!x_most.empty())
+ 	{
+ 		double best_estimate = -INFTY;
+ 		
+ 		for (Arc e: x_most)
+ 		{
++			if (ms56::remaining()<=0) {log.status=BCStatus::TimeLimitReached; break;}
+ 			vector<Arc> A = node->A; // infeasible arcs.
+ 			
+ 			// Left node (x_e = 0).
+@@ -275,19 +292,22 @@ void BCP::BranchNode(Node* node)
+ 	
+ 	*log.branching_time += rolex_branch.Pause();
+ 	// Process new children to the queue.
+-	for (Node& candidate: best_candidate)
++	for (Node& candidate: best_candidate) {
++		if (log.status==BCStatus::TimeLimitReached || log.status==BCStatus::MemoryLimitReached) break;
+ 		ProcessNode(new Node(candidate));
++	}
+ }
+ 
+ void BCP::FreezeHeuristic()
+ {
+ 	BCSolver bc_solver;
+-	bc_solver.time_limit = time_limit;
++	bc_solver.time_limit = Duration(std::max(0.0,ms56::remaining()),DurationUnit::Seconds);
+ 	auto bc_log = bc_solver.Solve(spf->formulation, {BCOption::BestIntSolution});
+ 	if (bc_log.status == BCStatus::Optimum && bc_log.best_int_value < z_ub)
+ 	{
+ 		z_ub = bc_log.best_int_value;
+ 		ub = *bc_log.best_int_solution;
++		ms56::candidate(VRPSolution(z_ub,spf->InterpretSolution(ub)),"FreezeHeuristic");
+ 	}
+ }
+ 
+diff --git a/code/src/main_bp.cpp b/code/src/main_bp.cpp
+index f21867f..71828ae 100644
+--- a/code/src/main_bp.cpp
++++ b/code/src/main_bp.cpp
+@@ -7,6 +7,7 @@
+ #include <iostream>
+ #include <vector>
+ #include <climits>
++#include "ms56_events.h"
+ 
+ #include <goc/goc.h>
+ 
+@@ -93,7 +94,7 @@ int main(int argc, char** argv)
+ 			spf.AddRoute(vrp.BestDurationRoute({vrp.o, i, vrp.d}));
+ 
+ 		BCP bcp(vrp.D, &spf);
+-		bcp.time_limit = time_limit;
++		bcp.time_limit = Duration(std::max(0.0,ms56::remaining()),DurationUnit::Seconds);
+ 		bcp.cut_limit = cut_limit;
+ 		bcp.node_limit = node_limit;
+ 
+@@ -107,19 +108,24 @@ int main(int argc, char** argv)
+ 		lbl.sort_by_cost = sort_by_cost;
+ 		lbl.symmetric = symmetric;
+ 
++		int exact_calls=0, exact_finished=0;
+ 		int heuristic_level = 0; // 0: relax cost, 1: relax elementarity, 2: exact
+ 		int max_level = exact_labeling ? 2 : 1; // exact
+ 		vector<string> level_name = {"Heuristic Cost", "Heuristic Elementarity", "Exact"};
+ 		bcp.pricing_solver = [&](const PricingProblem &pricing_problem, int node_number, Duration tlimit,
+ 								 CGExecutionLog *cg_execution_log) {
+ 			Stopwatch iteration_rolex(true);
++			bcp.final_pricing_complete=false;
+ 			vector<Route> R;
+ 			while (heuristic_level <= max_level)
+ 			{
+-				lbl.time_limit = tlimit - iteration_rolex.Peek();
++				lbl.time_limit = Duration(std::max(0.0,ms56::remaining()),DurationUnit::Seconds);
+ 				lbl.relax_cost_check = heuristic_level == 0;
+ 				lbl.relax_elementary_check = heuristic_level == 1;
++				if (heuristic_level==2) ++exact_calls;
+ 				auto lbl_log = lbl.Run(pricing_problem, &R);
++				if (heuristic_level==2 && lbl_log.status==BLBStatus::Finished) { ++exact_finished; if(R.empty()) bcp.final_pricing_complete=true; }
++				if(ms56::remaining()<=0 || lbl_log.status==BLBStatus::TimeLimitReached) {cg_execution_log->status=CGStatus::TimeLimitReached;break;}
+ 
+ 				// Add iteration log.
+ 				cg_execution_log->iterations->push_back(lbl_log);
+@@ -145,6 +151,7 @@ int main(int argc, char** argv)
+ 		auto log = bcp.Run(&solution);
+ 
+ 		output["Exact"] = log;
++		output["exact_pricing"]={{"restricted_master_infeasible",bcp.restricted_master_infeasible},{"unbranched_fractional",bcp.unbranched_fractional},{"calls",exact_calls},{"finished",exact_finished},{"cg_optimum_count",bcp.cg_optimum_count},{"certified_cg_optimum_count",bcp.certified_cg_optimum_count}};
+ 		output["Best solution"] = solution;
+ 
+ 		clog << "Time: " << log.time << endl;
+@@ -160,7 +167,7 @@ int main(int argc, char** argv)
+ 		}
+ 
+ 		// Send JSON output to cout.
+-		cout << output << endl;
++		ms56::emit({{"event","native_final"},{"native_result",output}});
+ 	}
+ 	catch (std::bad_alloc& e)
+ 	{

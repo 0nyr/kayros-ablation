@@ -118,7 +118,11 @@ def main():
 
         native['exact'] = solve_duration(loaded, time_limit_s=remaining(), cut_limit=500, memory_limit_mb=args.memory_mb,
             initial_routes=witness, on_incumbent=exact_hook, on_event=event_hook)
-        emit('phase', phase='exact_return', status=native['exact']['exact_log']['status'])
+        emit('phase', phase='exact_return', status=native['exact']['exact_log']['status'],
+             closure_census=native['exact'].get('closure_census'),
+             effective_backend_settings=native['exact'].get('effective_backend_settings'),
+             effective_algorithm_settings=native['exact'].get('effective_algorithm_settings'),
+             checker_infeasible_columns=native['exact'].get('checker_infeasible_columns'))
     path = Path(args.native_result)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix+'.tmp')

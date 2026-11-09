@@ -17,6 +17,8 @@ def main():
     parser.add_argument('--patch-dir', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--cplex-library', type=Path)
+    parser.add_argument('--highs-library', type=Path)
+    parser.add_argument('--highs-source', type=Path)
     args = parser.parse_args()
 
     def digest(path):
@@ -56,7 +58,9 @@ def main():
     inventory['dynamic_libraries'] = linked
     if args.cplex_library is not None:
         inventory['cplex_static_library'] = {'path': str(args.cplex_library), 'sha256': digest(args.cplex_library)}
-    highs_git = args.source/'build/highs/_deps/highs-src'
+    if args.highs_library is not None:
+        inventory['highs_static_library'] = {'path': str(args.highs_library), 'sha256': digest(args.highs_library)}
+    highs_git = args.highs_source or args.source/'build/highs/_deps/highs-src'
     if args.backend == 'highs' and highs_git.exists():
         inventory['highs_commit'] = subprocess.check_output(['git', '-C', str(highs_git), 'rev-parse', 'HEAD'], text=True).strip()
     args.output.parent.mkdir(parents=True, exist_ok=True)

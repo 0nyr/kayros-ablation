@@ -54,7 +54,7 @@ def main():
         ax.set_xlabel('Elapsed time from process launch (s)'); ax.set_xlim(0,horizon)
         ax.grid(alpha=.25)
     axes[1].set_ylim(-.02,1.02)
-    fig.suptitle(report['wave_name']+' | development evidence, proof claims unverified',fontsize=12)
+    fig.suptitle(report['wave_name']+' | incumbent-quality pilot',fontsize=12)
     handles,labels=axes[0].get_legend_handles_labels()
     fig.legend(handles,labels,loc='lower center',bbox_to_anchor=(.5,.045),ncol=2,frameon=False)
     fig.text(.5,.012,'All scheduled cells retained. Equal instance weights. Frozen primal references are not proof certificates.',ha='center',fontsize=9)
