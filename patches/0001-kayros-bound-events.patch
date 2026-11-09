@@ -1,0 +1,155 @@
+--- a/cpp/lera/main/include/bcp/bcp.h
++++ b/cpp/lera/main/include/bcp/bcp.h
+@@ -34,6 +34,7 @@
+ 	int node_limit;
+ 	int cut_limit;
+ 	BCPPricingFunction pricing_solver;
++	std::function<void(goc::Duration, double, const std::string&)> on_bound;
+ 	BCPIncumbentCallback on_incumbent; // optional; called on every new UB.
+ 
+ 	// Initializes the Branch cut and price solver.
+--- a/cpp/lera/main/src/bcp/bcp.cpp
++++ b/cpp/lera/main/src/bcp/bcp.cpp
+@@ -94,6 +94,10 @@
+ 	Node* root = new Node{0, INFTY, {}};
+ 	ProcessNode(root);
+ 	log.root_time = rolex.Peek();
++	if (log.root_lp_value.IsSet()) {
++		z_lb = *log.root_lp_value;
++		if (on_bound) on_bound(rolex.Peek(), z_lb, "root_complete");
++	}
+ 
+ 	if (!q.empty())
+ 	{
+@@ -127,6 +131,10 @@
+ 				// Output to console.
+ 				if (tstream.RegisterAttempt()) tstream.WriteRow({STR(rolex.Peek()), STR(log.nodes_closed), STR(log.nodes_open), STR(z_lb), STR(z_ub), STR(spf->formulation->VariableCount())});
+ 			}
++			if (log.status == BCStatus::DidNotStart && !q.empty()) {
++				z_lb = std::max(z_lb, std::min(z_ub, q.top()->bound));
++				if (on_bound) on_bound(rolex.Peek(), z_lb, "frontier");
++			}
+ 			delete bbnode;
+ 		}
+ 		// (M5.2) Only close the gap when the tree was fully explored: a branch
+@@ -140,7 +148,10 @@
+ 		// open node's bound (q is best-bound-first), not the last popped one —
+ 		// report it so the final incumbent's true gap is known. If the TL hit
+ 		// during root CG there is no valid LB and best_bound stays unset.
+-		if (!q.empty()) z_lb = std::max(z_lb, q.top()->bound);
++		// An interrupted active branch can have children absent from q.
++		// Retain its inherited bound rather than advancing to the queue alone.
++		if (!q.empty() && log.status == BCStatus::DidNotStart)
++			z_lb = std::max(z_lb, std::min(z_ub, q.top()->bound));
+ 
+ 		// Delete nodes that were not processed.
+ 		while (!q.empty()) { delete q.top(); q.pop(); }
+@@ -153,6 +164,8 @@
+ 		z_lb = z_ub;
+ 	}
+ 	log.time = rolex.Peek();
++	if (on_bound) on_bound(log.time, z_lb,
++		log.status == BCStatus::Optimum && z_ub < INFTY ? "search_closed" : "search_terminated");
+ 	
+ 	// Set bounds and solutions found.
+ 	if (z_ub != INFTY) log.best_int_value = z_ub;
+--- a/cpp/lera/bridge/lera_bridge.h
++++ b/cpp/lera/bridge/lera_bridge.h
+@@ -41,6 +41,7 @@
+     // routes}); the same records are also collected in the result's
+     // "incumbents" array. Keep it cheap — the solve blocks on it.
+     std::function<void(const std::string& incumbent_json)> on_incumbent;
++    std::function<void(const std::string&)> on_event;
+ };
+ 
+ // payload: normalized Lera instance JSON (built by the kayros.lera Python
+--- a/cpp/lera/bridge/lera_bridge.cpp
++++ b/cpp/lera/bridge/lera_bridge.cpp
+@@ -173,6 +173,16 @@
+              << " columns added" << (valid_ub && added > 0 ? ", UB set" : ", no UB") << endl;
+     }
+ 
++    int exact_calls = 0, exact_finished = 0;
++    nlohmann::json bound_events = nlohmann::json::array();
++    bcp.on_bound = [&](Duration elapsed, double bound, const std::string& source) {
++        nlohmann::json entry = {{"event", source == "search_closed" ? "search_closed" : (source == "search_terminated" ? "search_terminated" : "global_bound")},
++            {"time", elapsed.Amount(DurationUnit::Seconds)}, {"source", source},
++            {"global_lb", bound > -INFTY && bound < INFTY ? nlohmann::json(bound) : nlohmann::json(nullptr)},
++            {"exact_pricing", {{"calls", exact_calls}, {"finished", exact_finished}}}};
++        if (params.on_event) params.on_event(entry.dump());
++        bound_events.push_back(std::move(entry));
++    };
+     nlohmann::json incumbents = nlohmann::json::array();
+     bcp.on_incumbent = [&](Duration elapsed, const VRPSolution& sol, const std::string& origin) {
+         nlohmann::json entry = {
+@@ -201,7 +211,9 @@
+         // (M5.2) Residual budget from the BCP's single absolute deadline,
+         // not from a per-call stopwatch chain.
+         lbl.time_limit = bcp.deadline.Remaining();
++        if (heuristic_level == levels.size() - 1) ++exact_calls;
+         auto lbl_log = lbl.Run(pp, &R, levels[heuristic_level]);
++        if (heuristic_level == levels.size() - 1 && lbl_log.status == BLBStatus::Finished) ++exact_finished;
+ 
+         // Add iteration log.
+         cg_execution_log->iterations->push_back(lbl_log);
+@@ -358,6 +370,8 @@
+ 
+     nlohmann::json result;
+     result["exact_log"] = log;
++    result["bound_events"] = bound_events;
++    result["exact_pricing"] = {{"calls", exact_calls}, {"finished", exact_finished}};
+     result["checker_infeasible_columns"] = checker_infeasible_count;
+     // kayros (M13.2): guard observability, never used in control flow.
+     result["memory"] = {
+--- a/cpp/lera/bridge/lera_module.cpp
++++ b/cpp/lera/bridge/lera_module.cpp
+@@ -30,7 +30,7 @@
+         [](const std::string& payload, double time_limit_s, int cut_limit, int node_limit,
+            int solution_limit, py::object on_incumbent,
+            std::vector<std::vector<int>> initial_routes, double stab_alpha,
+-           double memory_limit_mb) {
++           double memory_limit_mb, py::object on_event) {
+             kayros::lera::SolveParams params;
+             params.time_limit_s = time_limit_s;
+             params.cut_limit = cut_limit;
+@@ -47,6 +47,12 @@
+                     on_incumbent(incumbent_json);
+                 };
+             }
++            if (!on_event.is_none()) {
++                params.on_event = [on_event](const std::string& event_json) {
++                    py::gil_scoped_acquire gil;
++                    on_event(event_json);
++                };
++            }
+             py::gil_scoped_release release;
+             return kayros::lera::solve_duration_json(payload, params);
+         },
+@@ -54,7 +60,7 @@
+         py::arg("node_limit") = INT_MAX, py::arg("solution_limit") = 3000,
+         py::arg("on_incumbent") = py::none(),
+         py::arg("initial_routes") = std::vector<std::vector<int>>{},
+-        py::arg("stab_alpha") = 0.0, py::arg("memory_limit_mb") = 0.0);
++        py::arg("stab_alpha") = 0.0, py::arg("memory_limit_mb") = 0.0, py::arg("on_event") = py::none());
+ 
+     // --- nyr NDCPWLF test surface (M5.9 exact stepwise labeling) -----------
+     // Direct pytest access to the step-capable PWL primitives while they are
+--- a/src/kayros/lera/__init__.py
++++ b/src/kayros/lera/__init__.py
+@@ -220,6 +220,7 @@
+     node_limit: int | None = None,
+     solution_limit: int = 3000,
+     on_incumbent: Callable[[dict[str, Any]], None] | None = None,
++    on_event: Callable[[dict[str, Any]], None] | None = None,
+     initial_routes: list[list[int]] | None = None,
+     stab_alpha: float = 0.0,
+     memory_limit_mb: float | None = None,
+@@ -315,6 +316,8 @@
+             on_incumbent(json.loads(incumbent_json))
+ 
+         kwargs["on_incumbent"] = _hook
++    if on_event is not None:
++        kwargs["on_event"] = lambda payload: on_event(json.loads(payload))
+     if initial_routes is not None:
+         kwargs["initial_routes"] = [[int(c) for c in route] for route in initial_routes]
+     result = json.loads(_lera.solve_duration_json(json.dumps(payload), **kwargs))

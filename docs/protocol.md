@@ -70,3 +70,7 @@ The runner specification must also state whether the prefix deadline is measured
 Process-launch timing, the pre-pilot reference policy, the 5-arm design, fixed prefix scheduling and exclusion of finer algorithmic ablations are settled. The reference snapshot is frozen and independently replayed. Campaign consumers must retain its pinned identity.
 
 The main study cannot demonstrate general exact-solver scalability or every stepwise/numerical repair. Separate correctness witnesses document changes outside the n100 panel's scope.
+
+## Implementation ruling (ms56)
+
+The fixed heuristic prefix deadline is measured from process launch. Loading and initialization consume part of the prefix, and all phases share the total process-launch deadline. This origin was confirmed before prefix probes. The main campaign remains held for author inspection of probe results and recommendations.

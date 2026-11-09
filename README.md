@@ -2,7 +2,7 @@
 
 This repository studies Kayros's exact component and its cooperation with heuristic search for the Time-Dependent Vehicle Routing Problem with Time Windows (TDVRPTW). We compare the original Lera-Romero solver, Kayros's exact component with 2 Linear Programming (LP) backends, its standalone heuristic and a heuristic prefix followed by exact search. CPLEX is the main exact backend to match the original solver, independently of any presumed speed advantage. A separate cold Kayros arm uses HiGHS under otherwise matched parameters. Finer algorithmic ablations are outside the study's scope.
 
-The project is at the protocol and implementation-preparation stage. The synthetic example runs now. Campaign runners, solver instrumentation and measured results are not yet available.
+The project is implementing correctness probes before its runtime pilot. A process-launch probe harness, pinned-checker validation, deterministic pilot selection and separately recorded solver patches are available. Full campaign settings remain gated on correctness evidence and author review. The synthetic example remains distinct from solver measurements.
 
 ## Experiment scope
 
@@ -46,7 +46,9 @@ This writes a PDF, PNG and JSON summary. The costs and proof events are invented
 | `docs/protocol.md` | Agreed design and remaining scientific choices |
 | `configs/source_pins.json` | Source identities and draft campaign settings, with unresolved artifacts marked explicitly |
 | `analysis/metric_demo.py` | Reproducible synthetic illustration |
-| `scripts/` | Pinned-checker guard, reference snapshot creation and replay |
+| `scripts/` | Checker guards and reference replay, pilot selection, process-launch probe harness and post-run validation |
+| `tests/` | Small harness and checker-adapter regressions |
+| `patches/` | Separately recorded source changes to pinned solvers |
 | `references/` | Frozen source witnesses, v0.11 reference solutions and validation records |
 | `outputs/` | Generated local outputs, ignored by Git |
 
@@ -59,3 +61,7 @@ Solver binaries, licensed dependencies, full instance/ATF data and real solver-r
 - [MAMUT-routing-lib](https://github.com/ANR-MAMUT/MAMUT-routing-lib), v0.11.0 commit `425dff351fdd9522ea6bb8c537dd416dfcd19614`.
 
 Code created in this repository is distributed under the [MIT license](LICENSE). Referenced software and datasets retain their own licenses.
+
+## Development probes
+
+The [pilot and proof specification](docs/pilot-proof-parameters.md) records the frozen 12-instance panel and proof-acceptance gates. `scripts/run_solver_probe.py` launches a single diagnostic cell with a pinned runtime manifest. It is not a campaign scheduler. Run the lightweight fixture tests with `python -m unittest discover -s tests`. Build and run solver probes on reserved compute nodes. The main campaign awaits review of the probe evidence.

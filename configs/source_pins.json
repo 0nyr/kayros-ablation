@@ -35,32 +35,109 @@
     "input_hashes_location": "reference manifest instances array",
     "checked_references": 56
   },
-  "correctness_tests": {"customer_counts": [25, 50], "trial_counts": [1, 3]},
-  "pilot": {"instances": 12, "horizon_seconds": 3600, "trial_counts": [1, 3]},
-  "main": {"provisional_horizon_seconds": 7200, "trials_per_arm": 5, "arms": 5},
+  "correctness_tests": {
+    "customer_counts": [
+      25,
+      50
+    ],
+    "trial_counts": [
+      1,
+      3
+    ]
+  },
+  "pilot": {
+    "instances": 12,
+    "horizon_seconds": 3600,
+    "trial_counts": [
+      1,
+      3
+    ],
+    "selection_path": "configs/pilot-selection.json"
+  },
+  "main": {
+    "provisional_horizon_seconds": 7200,
+    "trials_per_arm": 5,
+    "arms": 5
+  },
   "arms": [
-    {"id": "lera-exact", "backend": "cplex", "start": "cold"},
-    {"id": "kayros-bpca-cplex", "backend": "cplex", "start": "cold"},
-    {"id": "kayros-bpca-highs", "backend": "highs", "start": "cold"},
-    {"id": "kayros-heuristics", "backend": null, "strategy": "ils"},
-    {"id": "kayros-full-cplex", "backend": "cplex", "start": "in_budget_ils_prefix"}
+    {
+      "id": "lera-exact",
+      "backend": "cplex",
+      "start": "cold"
+    },
+    {
+      "id": "kayros-bpca-cplex",
+      "backend": "cplex",
+      "start": "cold"
+    },
+    {
+      "id": "kayros-bpca-highs",
+      "backend": "highs",
+      "start": "cold"
+    },
+    {
+      "id": "kayros-heuristics",
+      "backend": null,
+      "strategy": "ils"
+    },
+    {
+      "id": "kayros-full-cplex",
+      "backend": "cplex",
+      "start": "in_budget_ils_prefix"
+    }
   ],
-  "scope": {"solver_level_comparison": true, "backend_comparison": true, "algorithmic_component_ablations": false},
+  "scope": {
+    "solver_level_comparison": true,
+    "backend_comparison": true,
+    "algorithmic_component_ablations": false
+  },
   "clock_origin": "solver_process_launch_with_environment_prepared",
   "trial_identity": {
     "replicate_id": "required for every arm",
-    "heuristic_seed_values": [42, 123, 456, 789, 2026],
-    "replicate_ids": [1, 2, 3, 4, 5],
+    "heuristic_seed_values": [
+      42,
+      123,
+      456,
+      789,
+      2026
+    ],
+    "replicate_ids": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
     "heuristic_seed": "paired between heuristic and full arms; null for cold exact arms",
     "backend_seed": "null unless an actual seed control is documented"
   },
   "full_schedule": {
     "type": "fixed_ils_budget_then_warm_bpca",
-    "pilot_prefix_seconds": [15, 60, 180, 600, 1800],
+    "pilot_prefix_seconds": [
+      15,
+      60,
+      180,
+      600,
+      1800
+    ],
     "selected_prefix_seconds": null,
-    "stagnation_early_handoff": false
+    "stagnation_early_handoff": false,
+    "prefix_clock_origin": "process_launch",
+    "selection_order": [
+      "minimum_restricted_mean_time_to_accepted_proof",
+      "minimum_mean_primal_integral",
+      "shorter_prefix"
+    ]
   },
   "proof_timing": "solver_proof_completion",
-  "external_audit_time": {"included_in_metrics": false, "reported": false},
-  "pending": ["solver_artifact_builds", "proof_acceptance_details", "selected_prefix_duration", "matched_backend_parameters", "pilot_instance_selection"]
+  "external_audit_time": {
+    "included_in_metrics": false,
+    "reported": false
+  },
+  "pending": [
+    "solver_artifact_builds",
+    "proof_acceptance_details",
+    "selected_prefix_duration",
+    "matched_backend_parameters"
+  ]
 }

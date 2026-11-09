@@ -1,0 +1,12 @@
+diff --git a/code/goc/src/linear_programming/cplex/cplex_solver.cpp b/code/goc/src/linear_programming/cplex/cplex_solver.cpp
+index e296d89..ee5dcae 100644
+--- a/code/goc/src/linear_programming/cplex/cplex_solver.cpp
++++ b/code/goc/src/linear_programming/cplex/cplex_solver.cpp
+@@ -59,6 +59,7 @@ void apply_configuration(CplexFormulation* formulation, const json& config)
+ {
+ 	// Reset parameters of the formulation to the default values.
+ 	cplex::setdefaults(formulation->Environment());
++	cplex::setintparam(formulation->Environment(), CPX_PARAM_THREADS, 1); // ms56: fixed single-thread smoke build
+ 	
+ 	// Add new parameters.
+ 	for (auto it_param = config.begin(); it_param != config.end(); ++it_param)

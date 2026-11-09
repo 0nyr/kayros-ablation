@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "status": "prespecified_selection_no_runtime_observations",
+  "reference_manifest_sha256": "ea7310862b191655ff3109ee303afdd9dd420664da4ebb82ea30790ac415af66",
+  "historical_label_field": "metadata.optimality.proven is true",
+  "rule": "Per class: reserve RC105 in RC1, fill missing declared-proven then not-declared-proven strata lexicographically, then lexicographic fallback to 2.",
+  "warning": "Historical labels are stratifiers only. No current proof credit or measured difficulty is inferred.",
+  "stratum_counts": {
+    "C1": {
+      "declared_proven": 8,
+      "not_declared_proven": 1
+    },
+    "C2": {
+      "declared_proven": 0,
+      "not_declared_proven": 8
+    },
+    "R1": {
+      "declared_proven": 11,
+      "not_declared_proven": 1
+    },
+    "R2": {
+      "declared_proven": 0,
+      "not_declared_proven": 11
+    },
+    "RC1": {
+      "declared_proven": 6,
+      "not_declared_proven": 2
+    },
+    "RC2": {
+      "declared_proven": 0,
+      "not_declared_proven": 8
+    }
+  },
+  "selected_instances": [
+    {
+      "instance": "C101",
+      "class": "C1",
+      "historical_stratum": "declared_proven",
+      "instance_sha256": "e214ec882ed00d7bfc3c2dc23edd98f9a4798ecb06829a3eeb6f7d4efe2a0bc8",
+      "source_reference_sha256": "77e9dec67f808f62d931e7fc3a05ec398b2b13b8a8581a8d9ff659a321d6d040"
+    },
+    {
+      "instance": "C104",
+      "class": "C1",
+      "historical_stratum": "not_declared_proven",
+      "instance_sha256": "5ac4fad5011729262d3a25c3654c34661d14e635b109feb9e4ce8df594a630c3",
+      "source_reference_sha256": "74687f76ce90f61a770b72054ca35a6cc2e298ed775d5ff38aaabde67fadac89"
+    },
+    {
+      "instance": "C201",
+      "class": "C2",
+      "historical_stratum": "not_declared_proven",
+      "instance_sha256": "3f8823e1a2c8508a0c24f26aa62f2fceda72be6a418224132e4104c839e15497",
+      "source_reference_sha256": "29d3b95ff1b0a55cdbdf299f29e4e6690f801dc5ed5b63818efcb243d764d2c0"
+    },
+    {
+      "instance": "C202",
+      "class": "C2",
+      "historical_stratum": "not_declared_proven",
+      "instance_sha256": "31068b1474d93db18e1c7e1a2073be919061f0fa7eb6c3985690e0a92b89604e",
+      "source_reference_sha256": "9fe57baf962b044a04d711333385e581045c74ca1aa4c86f6fa2df18d3eed59b"
+    },
+    {
+      "instance": "R101",
+      "class": "R1",
+      "historical_stratum": "declared_proven",
+      "instance_sha256": "d94ea202a895c16d9dab1297eae882e2e5fd38c3c02b8a3a54f26b74681aa66f",
+      "source_reference_sha256": "637805dbb895b21cfa04f22e9f97bad9c971b5d5699b4797c5138be67375bc15"
+    },
+    {
+      "instance": "R112",
+      "class": "R1",
+      "historical_stratum": "not_declared_proven",
+      "instance_sha256": "0dd20b76f19cfafea4dcee68a4e1ca055adccfeafe6d7119b9e4a198e92dae90",
+      "source_reference_sha256": "b676ea888a8a54ef5e07e30a482399a65414a49da52cdc2520ce9ab1128be855"
+    },
+    {
+      "instance": "R201",
+      "class": "R2",
+      "historical_stratum": "not_declared_proven",
+      "instance_sha256": "fa7cd288739a8834ec0ece2f8817a50dc785aa1fa24bc9a94cf74b903148c62a",
+      "source_reference_sha256": "e7a9da3b5a9ec729881a588aced7dc584ced7661f51ee831e6e7342dd1ae2e89"
+    },
+    {
+      "instance": "R202",
+      "class": "R2",
+      "historical_stratum": "not_declared_proven",
+      "instance_sha256": "a1d14921c33d8d29e948b683edaa0c3da2aefb0aec3083f7454080e367d44b0e",
+      "source_reference_sha256": "674ec6b4ccac3c14a2fb282a6a5f416a8a9465d69534e7460d5847c3e54f998e"
+    },
+    {
+      "instance": "RC105",
+      "class": "RC1",
+      "historical_stratum": "declared_proven",
+      "instance_sha256": "524980c5bc6feacc996397a6cc6a98c9b390700c9dac0fd430419eec2efeae4b",
+      "source_reference_sha256": "e73e1590891c62d3c24c337719dd4a0c9db682274cb42f589d8a37a991199aec"
+    },
+    {
+      "instance": "RC104",
+      "class": "RC1",
+      "historical_stratum": "not_declared_proven",
+      "instance_sha256": "696d9ea6ef2671f7a70ee7e5bd73612620d8525f06ad0956e49fb626136b8bed",
+      "source_reference_sha256": "ead3ca468a1a4655566d728c5c4baca98eef510ca94a5a8602139e2951d8e957"
+    },
+    {
+      "instance": "RC201",
+      "class": "RC2",
+      "historical_stratum": "not_declared_proven",
+      "instance_sha256": "e2c3b5adb3af40210963808969b6a862cf7f0d3d204ce65bdb413331023dab86",
+      "source_reference_sha256": "25ba4e3067eda50847c48f07b9030fe82c07c9d47ff0238b488a4e9f3588bd63"
+    },
+    {
+      "instance": "RC202",
+      "class": "RC2",
+      "historical_stratum": "not_declared_proven",
+      "instance_sha256": "b7d6322bbb252fa75e17984c69a073058f3ae0a4dfa64ec85b61ec0f020daa23",
+      "source_reference_sha256": "bc972edf243d3a1401d6f2f575125ea1f0976100e260bd07086da605f40e5af0"
+    }
+  ]
+}
