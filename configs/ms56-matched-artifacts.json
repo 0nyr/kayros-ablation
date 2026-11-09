@@ -1,0 +1,41 @@
+{
+  "scope": "Index of binaries and patches shared by matched300-revised and the one-hour pilot. Full per-wave runtime and environment manifests remain authoritative.",
+  "wave": "matched300-revised",
+  "backends": {
+    "cplex": {
+      "source_manifest_sha256": "77a4487a067523d270098968bdcae7deac3558f7d7fd8453ce09f9cd23dd9ce3",
+      "binaries": {
+        "_core.cpython-313-x86_64-linux-gnu.so": "b527271e7224fbd1b14b6ed84de49098395e672172ab038a2cc45258572287f3",
+        "_lera.cpython-313-x86_64-linux-gnu.so": "234737646dcb2c175c4990d02f7e3e214b8d975adb94349f24c369503884a5fd"
+      },
+      "patches": {
+        "0001-kayros-bound-events.patch": "a16e9fcd5ad0a5f595f8fa7741a3972af3786def24945fd6b09d51c8a3b35ba2",
+        "0002-cplex-single-thread.patch": "de51c7e6c4380998397a2e292bf45ac9e23f52ee5a5828accdc637723c47f126",
+        "0003-kayros-node-closure-census.patch": "989a68a75bbdfd687bdf0a940b22b07a02adfb985b45fb36e31705c2be425ad3",
+        "0004-kayros-effective-backend-settings.patch": "1fe462773c572a331a32d4257d53da794a5e38bd84bca678bfaaf6c52cfa077a"
+      }
+    },
+    "highs": {
+      "source_manifest_sha256": "ac1d4cfa4db80c5eadd5d20916dc8fb3e87464b4604e4f27e31cd80a4ad16009",
+      "binaries": {
+        "_core.cpython-313-x86_64-linux-gnu.so": "b527271e7224fbd1b14b6ed84de49098395e672172ab038a2cc45258572287f3",
+        "_lera.cpython-313-x86_64-linux-gnu.so": "fc23881b826c615243be94790a1d5873ed845fccb3e5e7552ac3bc3c21c0f287"
+      },
+      "patches": {
+        "0001-kayros-bound-events.patch": "a16e9fcd5ad0a5f595f8fa7741a3972af3786def24945fd6b09d51c8a3b35ba2",
+        "0002-cplex-single-thread.patch": "de51c7e6c4380998397a2e292bf45ac9e23f52ee5a5828accdc637723c47f126",
+        "0003-kayros-node-closure-census.patch": "989a68a75bbdfd687bdf0a940b22b07a02adfb985b45fb36e31705c2be425ad3",
+        "0004-kayros-effective-backend-settings.patch": "1fe462773c572a331a32d4257d53da794a5e38bd84bca678bfaaf6c52cfa077a"
+      }
+    },
+    "upstream": {
+      "source_manifest_sha256": "80aa98f83f602e29db5281944053c2afa37800425adcdd7496b51133bdee6e91",
+      "binaries": {
+        "bp": "fb05b79a48c2c338b4bec4efa72daf5e401c60a1c942b97d988ef95e3b56955b"
+      },
+      "patches": {
+        "upstream-0002-phase2-events.patch": "2a8eceb492aa8f6300ed0c0fe31aa2266839da570bad287069a085075fa008f3"
+      }
+    }
+  }
+}

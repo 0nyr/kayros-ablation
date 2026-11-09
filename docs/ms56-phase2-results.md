@@ -1,6 +1,6 @@
 # Intermediate pilot results
 
-Status: 60 s and 300 s development waves complete. The prespecified 1-hour pilot is being prepared. The main campaign remains held for review.
+Status: 60 s and 300 s development waves complete. The prespecified 1-hour pilot is running on Abaca job 7012808, with 324 cells on 21 grvingt hosts. The main campaign remains held for review.
 
 ## Scope and protocol
 

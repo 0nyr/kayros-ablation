@@ -1,0 +1,169 @@
+--- a/cpp/lera/goc/include/goc/linear_programming/solver/ablation_settings.h
++++ b/cpp/lera/goc/include/goc/linear_programming/solver/ablation_settings.h
+@@ -1,6 +1,15 @@
+ #pragma once
+ #include "goc/lib/json.hpp"
++#include <cstdlib>
++#include <cstring>
+ namespace goc {
++inline bool ablation_instrumentation_enabled() {
++    static const bool enabled = [] {
++        const char* value = std::getenv("KAYROS_ABLATION_INSTRUMENTATION");
++        return !(value && std::strcmp(value, "0") == 0);
++    }();
++    return enabled;
++}
+ inline nlohmann::json& ablation_backend_settings() {
+     static nlohmann::json settings = nlohmann::json::object();
+     return settings;
+--- a/cpp/lera/main/src/bcp/bcp.cpp
++++ b/cpp/lera/main/src/bcp/bcp.cpp
+@@ -7,6 +7,7 @@
+ #include "bcp/bcp.h"
+ 
+ #include <climits>
++#include "goc/linear_programming/solver/ablation_settings.h"
+ 
+ using namespace std;
+ using namespace goc;
+@@ -96,7 +97,7 @@
+ 	log.root_time = rolex.Peek();
+ 	if (log.root_lp_value.IsSet()) {
+ 		z_lb = *log.root_lp_value;
+-		if (on_bound) on_bound(rolex.Peek(), z_lb, "root_complete");
++		if (on_bound && ablation_instrumentation_enabled()) on_bound(rolex.Peek(), z_lb, "root_complete");
+ 	}
+ 
+ 	if (!q.empty())
+@@ -133,7 +134,7 @@
+ 			}
+ 			if (log.status == BCStatus::DidNotStart && !q.empty()) {
+ 				z_lb = std::max(z_lb, std::min(z_ub, q.top()->bound));
+-				if (on_bound) on_bound(rolex.Peek(), z_lb, "frontier");
++				if (on_bound && ablation_instrumentation_enabled()) on_bound(rolex.Peek(), z_lb, "frontier");
+ 			}
+ 			delete bbnode;
+ 		}
+@@ -164,7 +165,7 @@
+ 		z_lb = z_ub;
+ 	}
+ 	log.time = rolex.Peek();
+-	if (on_bound) on_bound(log.time, z_lb,
++	if (on_bound && ablation_instrumentation_enabled()) on_bound(log.time, z_lb,
+ 		log.status == BCStatus::Optimum && z_ub < INFTY ? "search_closed" : "search_terminated");
+ 	
+ 	// Set bounds and solutions found.
+@@ -193,7 +194,7 @@
+ 	// (M5.2) An aborted probe must poison the run status: dropping both
+ 	// children of a node silently would let Run() claim optimality later.
+ 	node->rmp_infeasible = lp_log.status == LPStatus::Infeasible;
+-    if (node->rmp_infeasible) ++strong_rmp_infeasible_count;
++    if (ablation_instrumentation_enabled() && node->rmp_infeasible) ++strong_rmp_infeasible_count;
+ 	if (lp_log.status == LPStatus::TimeLimitReached) log.status = BCStatus::TimeLimitReached;
+ 	if (lp_log.status == LPStatus::MemoryLimitReached) log.status = BCStatus::MemoryLimitReached; // kayros (M13.2)
+ 	return lp_log.status == LPStatus::Optimum ? *lp_log.incumbent_value : INFTY;
+@@ -213,10 +214,12 @@
+ 	// Update node.
+ 	if (cg_log.status == CGStatus::Optimum)
+ 	{
+-        ++cg_optimum_count;
+-        bool certified = cg_log.iterations.IsSet() && !cg_log.iterations->empty()
+-            && cg_log.iterations->back().value("ablation_final_pricing_certified", false);
+-        if (certified) ++cg_certified_count; else ++cg_unresolved_count;
++        if (ablation_instrumentation_enabled()) {
++            ++cg_optimum_count;
++            bool certified = cg_log.iterations.IsSet() && !cg_log.iterations->empty()
++                && cg_log.iterations->back().value("ablation_final_pricing_certified", false);
++            if (certified) ++cg_certified_count; else ++cg_unresolved_count;
++        }
+ 		node->bound = cg_log.incumbent_value;
+ 		node->opt = *cg_log.incumbent;
+ 	}
+@@ -247,7 +250,7 @@
+ 	}
+ 	else if (cg_log.status == CGStatus::Infeasible)
+ 	{
+-        ++cg_infeasible_count;
++        if (ablation_instrumentation_enabled()) ++cg_infeasible_count;
+ 		log.nodes_closed++;
+ 		delete node;
+ 	}
+@@ -306,7 +309,7 @@
+ 	// Calculate all candidate estimate bounds and keep the best one.
+ 	vector<Node> best_candidate;
+     int selected_infeasible = 0;
+-    if (x_most.empty()) ++unbranched_fractional_count;
++    if (ablation_instrumentation_enabled() && x_most.empty()) ++unbranched_fractional_count;
+ 	if (!x_most.empty())
+ 	{
+ 		double best_estimate = -INFTY;
+@@ -340,7 +343,7 @@
+ 		}
+ 	}
+ 	
+-    if (log.status == BCStatus::DidNotStart) selected_rmp_infeasible_count += selected_infeasible;
++    if (ablation_instrumentation_enabled() && log.status == BCStatus::DidNotStart) selected_rmp_infeasible_count += selected_infeasible;
+ 	*log.branching_time += rolex_branch.Pause();
+ 	// Process new children to the queue.
+ 	for (Node& candidate: best_candidate)
+--- a/cpp/lera/bridge/lera_bridge.cpp
++++ b/cpp/lera/bridge/lera_bridge.cpp
+@@ -222,10 +222,10 @@
+         // (M5.2) Residual budget from the BCP's single absolute deadline,
+         // not from a per-call stopwatch chain.
+         lbl.time_limit = bcp.deadline.Remaining();
+-        if (heuristic_level == levels.size() - 1) ++exact_calls;
++        if (goc::ablation_instrumentation_enabled() && heuristic_level == levels.size() - 1) ++exact_calls;
+         auto lbl_log = lbl.Run(pp, &R, levels[heuristic_level]);
+         last_exact_finished = heuristic_level == levels.size() - 1 && lbl_log.status == BLBStatus::Finished;
+-        if (last_exact_finished) ++exact_finished;
++        if (goc::ablation_instrumentation_enabled() && last_exact_finished) ++exact_finished;
+ 
+         // Add iteration log.
+         cg_execution_log->iterations->push_back(lbl_log);
+@@ -264,7 +264,7 @@
+             // skipped rather than certified — the loud-fail below is for real
+             // routes the checker rejects.
+             if (r.path.size() < 3) continue;
+-            if (!column_keys.insert(path_key(r.path)).second) { ++duplicate_columns; continue; }
++            if (!column_keys.insert(path_key(r.path)).second) { if (goc::ablation_instrumentation_enabled()) ++duplicate_columns; continue; }
+             auto ev = checker_eval(checker_inst, r.path);
+             if (!ev.feasible)
+             {
+@@ -380,7 +380,7 @@
+         // BCStatus::MemoryLimitReached (the existing CG->BC branch).
+         if (MemoryMonitor::Exceeded())
+             cg_execution_log->status = CGStatus::MemoryLimitReached;
+-        if (cg_execution_log->iterations.IsSet() && !cg_execution_log->iterations->empty())
++        if (goc::ablation_instrumentation_enabled() && cg_execution_log->iterations.IsSet() && !cg_execution_log->iterations->empty())
+             cg_execution_log->iterations->back()["ablation_final_pricing_certified"] =
+                 certified_true_duals && !bcp.deadline.Reached() && !MemoryMonitor::Exceeded();
+     };
+@@ -389,6 +389,7 @@
+     auto log = bcp.Run(&solution);
+ 
+     nlohmann::json result;
++    result["instrumentation_enabled"] = goc::ablation_instrumentation_enabled();
+     result["effective_backend_settings"] = goc::ablation_backend_settings();
+     result["effective_algorithm_settings"] = {{"cut_limit", params.cut_limit}, {"cut_violation_threshold", 0.1}, {"algorithm_epsilon", 1e-6}, {"solution_limit", params.solution_limit}, {"node_limit", params.node_limit}, {"stab_alpha", params.stab_alpha}, {"ng_routes", false}};
+     result["exact_log"] = log;
+--- a/cpp/lera/goc/src/linear_programming/cplex/cplex_solver.cpp
++++ b/cpp/lera/goc/src/linear_programming/cplex/cplex_solver.cpp
+@@ -88,6 +88,7 @@
+ 
+ void record_ablation_settings(CplexFormulation* formulation, const string& phase)
+ {
++    if (!ablation_instrumentation_enabled()) return;
+     auto env = formulation->Environment();
+     json record = {{"backend", "CPLEX"}, {"version", CPXversion(env)}};
+     for (auto item : vector<pair<string,int>>{{"threads", CPX_PARAM_THREADS}, {"lp_method", CPX_PARAM_LPMETHOD},
+--- a/cpp/lera/goc/src/linear_programming/highs/highs_solver.cpp
++++ b/cpp/lera/goc/src/linear_programming/highs/highs_solver.cpp
+@@ -112,6 +112,7 @@
+ 		else if (it.value().is_boolean()) solver.setOptionValue(it.key(), (bool)it.value());
+ 		else solver.setOptionValue(it.key(), (string)it.value());
+     }
++    if (!ablation_instrumentation_enabled()) return;
+     json record = {{"backend", "HiGHS"}, {"version", solver.version()}};
+     for (const string key : {"threads", "random_seed", "simplex_strategy"}) {
+         HighsInt value; if (solver.getOptionValue(key, value) != HighsStatus::kOk) fail("Cannot read HiGHS option " + key);

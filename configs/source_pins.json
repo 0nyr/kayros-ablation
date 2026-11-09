@@ -1,11 +1,11 @@
 {
-  "status": "design_only_not_launchable",
+  "status": "pilot_running_main_held_for_review",
   "kayros": {
     "version": "1.6.1",
     "commit": "50eebc57964ac4f6762719ff21033783a31c12da",
     "annotated_tag_object": "873584fc359d5f2a896014a0792edef8d033a534",
-    "patch_sha256": null,
-    "binary_sha256": null
+    "runtime_manifest_policy": "Freeze backend-specific runtime_files and source_patch_files in every wave manifest; the design file is not a launch manifest.",
+    "artifact_index_path": "configs/ms56-matched-artifacts.json"
   },
   "checker": {
     "package": "mamut-routing-lib",
@@ -21,8 +21,8 @@
     "repository": "https://github.com/gleraromero/networks2020",
     "commit": "cabc56ad9cdb22bed81a8a31f1671d40152055e6",
     "verified_date": "2026-11-09",
-    "patch_sha256": null,
-    "binary_sha256": null
+    "runtime_manifest_policy": "Freeze backend-specific runtime_files and source_patch_files in every wave manifest; the design file is not a launch manifest.",
+    "artifact_index_path": "configs/ms56-matched-artifacts.json"
   },
   "dataset": {
     "family": "Dabia2013",
@@ -52,7 +52,8 @@
       1,
       3
     ],
-    "selection_path": "configs/pilot-selection.json"
+    "selection_path": "configs/pilot-selection.json",
+    "current_trials": 3
   },
   "main": {
     "provisional_horizon_seconds": 7200,
@@ -124,10 +125,11 @@
     "stagnation_early_handoff": false,
     "prefix_clock_origin": "process_launch",
     "selection_order": [
-      "minimum_restricted_mean_time_to_accepted_proof",
+      "minimum_restricted_mean_reported_computational_closure_time",
       "minimum_mean_primal_integral",
       "shorter_prefix"
-    ]
+    ],
+    "closure_scope": "declared numerical conventions, checked in-budget witness and disclosed execution diagnostics; see docs/pilot-proof-parameters.md"
   },
   "proof_timing": "solver_proof_completion",
   "external_audit_time": {
@@ -135,9 +137,9 @@
     "reported": false
   },
   "pending": [
-    "solver_artifact_builds",
-    "proof_acceptance_details",
+    "completed_one_hour_pilot",
     "selected_prefix_duration",
-    "matched_backend_parameters"
+    "main_horizon_and_resource_shape",
+    "main_frozen_manifest_and_author_review"
   ]
 }

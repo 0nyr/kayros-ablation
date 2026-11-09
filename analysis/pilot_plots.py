@@ -6,6 +6,7 @@ from collections import defaultdict
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from plot_style import arm_order, arm_style
 
 
 def main():
@@ -29,7 +30,7 @@ def main():
     horizon=horizons.pop()
     fig,axes=plt.subplots(1,2,figsize=(12,4.8))
     plotdata={}
-    for name,items in sorted(groups.items()):
+    for name,items in sorted(groups.items(),key=lambda item: arm_order(item[1][0][0]['arm'],item[1][0][0].get('prefix_s'))):
         times=sorted({0.,horizon}|{x['elapsed_s'] for _,env in items for x in env})
         gaps,attained=[],[]
         for t in times:
@@ -44,9 +45,10 @@ def main():
                 instance_attain[c['instance_name']].append(float(best is not None and best<=1.01*ref))
             gaps.append(sum(sum(v)/len(v) for v in instance_gaps.values())/len(instance_gaps))
             attained.append(sum(sum(v)/len(v) for v in instance_attain.values())/len(instance_attain))
-        label=name.replace('kayros-bpca-','Cold ').replace('kayros-full-cplex','Full CPLEX').replace('kayros-heuristics','ILS').replace('lera-exact','Lera CPLEX')
-        axes[0].step(times,gaps,where='post',label=label)
-        axes[1].step(times,attained,where='post',label=label)
+        label=name.replace('kayros-bpca-cplex','Cold CPLEX').replace('kayros-bpca-highs','Cold HiGHS').replace('kayros-full-cplex','Full CPLEX').replace('kayros-heuristics','ILS').replace('lera-exact','Lera CPLEX')
+        style=arm_style(items[0][0]['arm'],items[0][0].get('prefix_s'))
+        axes[0].step(times,gaps,where='post',label=label,**style)
+        axes[1].step(times,attained,where='post',label=label,**style)
         plotdata[name]={'elapsed_s':times,'mean_squeezed_gap':gaps,'raw_gap_1pct_attainment':attained}
     axes[0].set_ylabel('Mean squeezed gap to frozen v0.11 reference')
     axes[1].set_ylabel('Fraction attaining raw reference gap <= 1%')
@@ -56,7 +58,7 @@ def main():
     axes[1].set_ylim(-.02,1.02)
     fig.suptitle(report['wave_name']+' | incumbent-quality pilot',fontsize=12)
     handles,labels=axes[0].get_legend_handles_labels()
-    fig.legend(handles,labels,loc='lower center',bbox_to_anchor=(.5,.045),ncol=2,frameon=False)
+    fig.legend(handles,labels,loc='lower center',bbox_to_anchor=(.5,.045),ncol=3,frameon=False)
     fig.text(.5,.012,'All scheduled cells retained. Equal instance weights. Frozen primal references are not proof certificates.',ha='center',fontsize=9)
     fig.tight_layout(rect=(0,.21,1,.94))
     a.output.mkdir(parents=True,exist_ok=True)

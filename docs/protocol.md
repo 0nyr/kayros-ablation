@@ -1,12 +1,12 @@
 # Experiment protocol
 
-Status: design in progress. This protocol distinguishes approved choices from proposals. It contains no measured solver results.
+Status: intermediate pilots complete and 1-hour pilot running. The main campaign awaits the global prefix/horizon decision and author review. This protocol distinguishes approved choices from proposals. Measured results are recorded separately in [the pilot report](ms56-phase2-results.md).
 
 ## Preparation status
 
 The 5 arms and fixed prefix candidates are agreed, and the 56-reference snapshot is frozen, checked and published. The repository records the immutable v0.11 checker source and installed-source identity, the analysis dependency lock and the exact reference manifest digest. Reference checks are preparation evidence, not solver-performance results.
 
-The campaign remains unlaunched. Solver builds and their patches, process-launch instrumentation, global-bound events, the 12 pilot identities, matched LP/backend parameters and detailed proof-acceptance checks remain to implement or specify. The pilot must select one fixed prefix for the final full arm using a prespecified criterion. Do not interpret the draft configuration as a launchable campaign manifest.
+The main campaign remains unlaunched. Source-pinned builds, process-launch instrumentation, interrupted-bound repair, closure diagnostics, the 12 pilot identities and matched effective backend settings are implemented and frozen per wave. The pilot must select one fixed prefix for the final full arm using the approved criterion below. Do not interpret the design configuration as a launchable main-campaign manifest. The computational-closure scope at the end of this document governs interpretation of the earlier proof terminology.
 
 ## Approved scope
 
@@ -56,16 +56,16 @@ Preserve fixed instance ordering in status matrices. Distinguish no valid incumb
 
 Freeze source commits, patch digests, compiler and dependency versions, binary hashes, LP parameters, inputs and materialized travel-time data, reference routes/costs, seeds, time/thread/memory limits and full arm configurations. Verify the v0.11 checker identity before any real cost computation. The current pins file does not yet satisfy these requirements.
 
-Use explicit one-thread settings for every LP backend. HiGHS currently sets this internally, but the CPLEX wrapper must be configured explicitly. Enforce per-worker memory limits and RAM-aware parallelism. Result identity includes the manifest and parameter digest, and resumption checks identity and completion rather than filename existence alone.
+Use explicit one-thread settings for every LP backend. Both matched pilot backends now set and read back the effective one-thread configuration. Enforce per-worker memory limits and RAM-aware parallelism. Result identity includes the manifest and parameter digest, and resumption checks identity and completion rather than filename existence alone.
 
 Preserve streamed candidate routes and timestamps, native and checked objective values, valid global-bound events, proof completion, final status and pricing diagnostics. Warm-start proof without a new incumbent must retain the actual seed witness. Validate event recovery after forced termination before a pilot.
 
 ## Open choices
 
-1. Prespecify how the 5 fixed prefixes and accepted proof outcomes select one global final configuration, including a tie rule and the incumbent-quality trade-off.
-2. Complete the detailed cross-solver proof-acceptance checks and matched backend parameter manifest before launch.
+1. Select the global prefix from the completed pilot by minimum restricted mean computational-closure time, then lower mean Λ on a tie, then the shorter prefix. This ordering is author-approved. Computational closure follows the declared-convention scope below.
+2. Decide the common main horizon and resource shape from completed pilot trajectories, memory observations and available capacity. Review the results with the author before launch.
 
-The runner specification must also state whether the prefix deadline is measured from process launch or heuristic-stage entry. Whichever phase boundary is selected, all setup and handoff work remains inside the common process-launch horizon.
+The prefix deadline is measured from process launch, as confirmed by the author. All setup and handoff work remains inside the common process-launch horizon.
 
 Process-launch timing, the pre-pilot reference policy, the 5-arm design, fixed prefix scheduling and exclusion of finer algorithmic ablations are settled. The reference snapshot is frozen and independently replayed. Campaign consumers must retain its pinned identity.
 

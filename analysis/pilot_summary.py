@@ -10,6 +10,81 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from checker_contract import checker_identity
+from probe_runner import digest
+
+
+def assert_scheduled_row(task, row):
+    """Refuse a row associated with another scheduled task, including failures."""
+    if row and row.get('task_id') != task['task_id']:
+        raise ValueError('Scheduled row task identity mismatch')
+    for key, value in task.items():
+        if key in row and row[key] != value:
+            raise ValueError(f'Scheduled row mismatch: {key}')
+
+
+def assert_task_result_identity(*, task, row, identity, result, wave, reference,
+                                expected_reference_manifest_sha256,
+                                scheduled_manifest=None):
+    """Bind a completed observation to its scheduled cell after relocation.
+
+    Event and native-sidecar file integrity are separate checks. Legacy trial 0
+    is a real identifier and is compared directly rather than renumbered.
+    """
+    assert_scheduled_row(task, row)
+    run_id = row.get('run_id')
+    core_identity = {key: value for key, value in identity.items()
+                     if key not in ('run_id', 'manifest')}
+    manifest = identity.get('manifest', {})
+    manifest_hash = digest(manifest)
+    if (not run_id or identity.get('run_id') != run_id
+            or result.get('run_id') != run_id or digest(core_identity) != run_id
+            or result.get('identity_hash') != run_id
+            or identity.get('manifest_hash') != manifest_hash
+            or result.get('manifest_hash') != manifest_hash):
+        raise ValueError('Run or manifest identity mismatch')
+    if scheduled_manifest is not None and digest(scheduled_manifest) != manifest_hash:
+        raise ValueError('Scheduled manifest identity mismatch')
+    if wave.get('reference_manifest_sha256') != expected_reference_manifest_sha256:
+        raise ValueError('Wave reference manifest identity mismatch')
+    # Native legacy manifests have no reference/selection fields. Their wave
+    # identity and exact input hashes still bind them to the frozen schedule.
+    for key in ('reference_manifest_sha256', 'selection_sha256'):
+        if key in manifest and manifest[key] != wave.get(key):
+            raise ValueError(f'Manifest/wave mismatch: {key}')
+    for key in ('wave_name', 'wave_id'):
+        if key in wave and manifest.get(key) != wave[key]:
+            raise ValueError(f'Manifest/wave mismatch: {key}')
+    for key in ('created_utc', 'oar_job_id'):
+        if key in manifest and key in wave and manifest[key] != wave[key]:
+            raise ValueError(f'Manifest/wave mismatch: {key}')
+    params = identity.get('parameters', {})
+    expected = {'instance_name': task['instance_name'], 'arm': task['arm'],
+                'prefix_seconds': task.get('prefix_s'),
+                'repetition': task['replicate'], 'search_seed': task.get('seed'),
+                'instance_sha256': reference['instance_sha256'],
+                'atf_sha256': reference['atf_file_sha256']}
+    missing = object()
+    for key, value in expected.items():
+        if params.get(key, missing) != value:
+            raise ValueError(f'Scheduled parameter mismatch: {key}')
+    if (task['instance_name'] != reference['instance_name']
+            or task.get('instance_sha256', reference['instance_sha256']) != reference['instance_sha256']
+            or identity.get('horizon_s') != task['horizon_s']
+            or wave.get('horizon_s', task['horizon_s']) != task['horizon_s']):
+        raise ValueError('Scheduled input or horizon mismatch')
+    reference_cost = (float.fromhex(reference['reference_cost_hex'])
+                      if 'reference_cost_hex' in reference else reference.get('reference_cost'))
+    if 'reference_cost' in task and task['reference_cost'] != reference_cost:
+        raise ValueError('Scheduled reference cost mismatch')
+    if 'cpu_core' in task and params.get('cpu_affinity') != [task['cpu_core']]:
+        raise ValueError('Scheduled CPU affinity mismatch')
+    if 'memory_mb' in task and (params.get('memory_mb') != task['memory_mb']
+            or params.get('memory_cap_bytes') != task['memory_mb'] * 1024 ** 2):
+        raise ValueError('Scheduled memory cap mismatch')
+    if 'result_path' in row:
+        expected_path = Path(task['output_directory']) / run_id / 'result.json'
+        if Path(row['result_path']) != expected_path:
+            raise ValueError('Scheduled row result path mismatch')
 
 
 def score_trace(envelope, reference, horizon):
@@ -47,6 +122,8 @@ def summarize(wave_path, snapshot):
         raise ValueError('Reference manifest identity mismatch')
     refs = {e['instance_name']: e for e in json.loads(raw)['instances']}
     wave = json.loads((wave_path/'wave.json').read_text())
+    if wave.get('reference_manifest_sha256') != pins['dataset']['reference_manifest_sha256']:
+        raise ValueError('Wave reference manifest identity mismatch')
     cells = []
     seen = set()
     for task in wave['scheduled_cells']:
@@ -56,6 +133,7 @@ def summarize(wave_path, snapshot):
         seen.add(tid)
         record_path = wave_path/'rows'/f'{tid}.json'
         row = json.loads(record_path.read_text()) if record_path.exists() else {}
+        assert_scheduled_row(task, row)
         result = None
         events = []
         run_id = row.get('run_id')
@@ -63,14 +141,12 @@ def summarize(wave_path, snapshot):
             cell = wave_path/'cells'/run_id
             result = json.loads((cell/'result.json').read_text())
             identity = json.loads((cell/'identity.json').read_text())
-            if result['run_id'] != run_id or identity['run_id'] != run_id:
-                raise ValueError('Run identity mismatch')
-            params = identity['parameters']
             ref = refs[task['instance_name']]
-            if params['instance_sha256'] != ref['instance_sha256'] or params['atf_sha256'] != ref['atf_file_sha256']:
-                raise ValueError('Input identity mismatch')
-            if identity['horizon_s'] != task['horizon_s'] or params['arm'] != task['arm']:
-                raise ValueError('Scheduled task mismatch')
+            scheduled_manifest = json.loads((wave_path/'manifests'/Path(task['manifest_path']).name).read_bytes())
+            assert_task_result_identity(task=task, row=row, identity=identity,
+                result=result, wave=wave, reference=ref,
+                expected_reference_manifest_sha256=pins['dataset']['reference_manifest_sha256'],
+                scheduled_manifest=scheduled_manifest)
             if hashlib.sha256((cell/'events.jsonl').read_bytes()).hexdigest() != result['events_sha256']:
                 raise ValueError('Event digest mismatch')
             events = [json.loads(line) for line in (cell/'events.jsonl').read_text().splitlines()]
