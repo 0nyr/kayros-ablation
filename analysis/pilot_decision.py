@@ -140,6 +140,12 @@ def decide(report, wave):
         'tie_rule': 'Exact equality of computed aggregate values. Sensitivity analyses do not override the approved ordering.',
         'recommendation_eligible': not blocking_cells,
         'blocking_cells': blocking_cells,
+        'native_guard_review_warnings': [
+            {'task_id': cell['task_id'], 'configuration': configuration(cell),
+             'reported_closure_s': cell['reported_closure_s'],
+             'native_rejected_priced_columns': cell.get('native_rejected_priced_columns'),
+             'stderr_warning_count': cell.get('native_guard_stderr_warning_count', 0)}
+            for cell in cells if cell.get('native_guard_warning')],
         'diagnostic_best_prefix_s': ranking[0]['prefix_s'],
         'selected_prefix_s': ranking[0]['prefix_s'] if not blocking_cells else None,
         'prefix_ranking': ranking,

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -38,9 +39,9 @@ def repetition_slots(count: int) -> list[tuple[int, int]]:
 
 
 
-def planned_cells(names, full_prefixes, repetitions, include_upstream=False) -> list[dict]:
+def planned_cells(names, full_prefixes, repetitions, include_upstream=False, allow_unselected_prefix=False) -> list[dict]:
     names = list(names)
-    prefixes = [float(prefix) for prefix in full_prefixes]
+    prefixes = [None if prefix is None and allow_unselected_prefix else float(prefix) for prefix in full_prefixes]
     if len(set(names)) != len(names) or len(set(prefixes)) != len(prefixes):
         raise ValueError('Instance identities and full prefixes must be unique')
     configurations = [(arm, None) for arm in ARMS if arm != 'kayros-full-cplex']
@@ -69,6 +70,25 @@ def launcher_command(task: dict, wave: Path, python: str, taskset: str) -> list[
     return command
 
 
+
+def claim_node_start(wave: Path, tasks: list[dict], hostname: str) -> Path:
+    """Refuse accidental re-entry before it can replace completed summary rows."""
+    if (wave / f'node-{hostname}.json').exists():
+        raise FileExistsError('Node metadata already exists; use read-only recovery audit')
+    for task in tasks:
+        artifacts = [wave / 'rows' / (task['task_id'] + '.json')]
+        artifacts += [Path(task[key]) for key in ['launcher_stdout', 'launcher_stderr'] if key in task]
+        if any(path.exists() for path in artifacts):
+            raise FileExistsError('Node task artifacts already exist; use read-only recovery audit')
+    claims = wave / 'node-start-claims'
+    claims.mkdir(exist_ok=True)
+    claim = claims / hostname
+    claim.mkdir()  # Atomic exclusive ownership, including concurrent re-entry.
+    atomic_json(claim / 'owner.json', {'host': hostname, 'controller_pid': os.getpid(),
+                'oar_job_id': os.environ.get('OAR_JOB_ID'), 'task_ids': [task['task_id'] for task in tasks]})
+    return claim
+
+
 def node(root: Path, wave: Path) -> None:
     specification = json.loads((wave / 'wave.json').read_text())
     hostname = socket.gethostname().split('.')[0]
@@ -76,6 +96,7 @@ def node(root: Path, wave: Path) -> None:
     cores = sorted({task['cpu_core'] for task in tasks})
     if not tasks or not set(cores) <= os.sched_getaffinity(0):
         raise RuntimeError('Node task assignment is absent, overlaps cores or exceeds OAR affinity')
+    claim_node_start(wave, tasks, hostname)
     # Reserve memory for simultaneous core lanes, including queued repetitions.
     memory_available = next(int(line.split()[1]) for line in Path('/proc/meminfo').read_text().splitlines() if line.startswith('MemAvailable:'))
     if len(cores) * max(task['memory_mb'] for task in tasks) * 1024 + 16 * 1024**2 > memory_available:
@@ -120,6 +141,20 @@ def node(root: Path, wave: Path) -> None:
     atomic_json(wave / f'complete-{hostname}.json', {'host': hostname, 'completed_cells': len(rows), 'launch_failures': sum(row['status'] == 'launch_failure' for row in rows)})
 
 
+
+def load_selection(path: Path, references: dict, expected_count: int, expected_reference_digest: str) -> dict:
+    selection = json.loads(path.read_bytes())
+    entries = selection['selected_instances']
+    selected = {entry['instance']: entry for entry in entries}
+    if (selection.get('schema_version') != 1 or selection.get('reference_manifest_sha256') != expected_reference_digest
+            or len(entries) != expected_count or len(selected) != expected_count):
+        raise ValueError('Frozen selection digest, count or identity uniqueness mismatch')
+    for name, entry in selected.items():
+        if name not in references or entry['instance_sha256'] != references[name]['instance_sha256']:
+            raise ValueError(f'Selected instance identity mismatch: {name}')
+    return selected
+
+
 def coordinate(args) -> None:
     nodefile_name = os.environ.get('OAR_NODEFILE')
     if not nodefile_name or not Path(nodefile_name).is_file() or not os.environ.get('OAR_JOB_ID'):
@@ -129,9 +164,9 @@ def coordinate(args) -> None:
     if not hosts or len(set(hosts)) != len(hosts) or not set(hosts) <= set(allocated):
         raise RuntimeError('Distinct measuring hosts must belong to the real nodefile')
     slots = repetition_slots(args.repetitions)
-    if args.workers_per_host < 1 or args.horizon <= 0:
+    if args.workers_per_host < 1 or not math.isfinite(args.horizon) or args.horizon <= 0 or args.memory_mb <= 0 or args.expected_count <= 0:
         raise ValueError('Worker count, horizon and repetitions must be positive')
-    if any(prefix <= 0 or prefix >= args.horizon for prefix in args.full_prefixes):
+    if any(not math.isfinite(prefix) or prefix <= 0 or prefix >= args.horizon for prefix in args.full_prefixes):
         raise ValueError('Full prefixes must be positive and shorter than the horizon')
     wave_id = uuid.uuid4().hex
     created_utc = datetime.now(timezone.utc).isoformat()
@@ -147,12 +182,11 @@ def coordinate(args) -> None:
     if sha256(snapshot / 'manifest.json') != expected_reference:
         raise RuntimeError('Reference manifest mismatch')
     reference = json.loads((snapshot / 'manifest.json').read_text())
-    selection_path = args.source / 'configs/pilot-selection.json'
-    selection = json.loads(selection_path.read_text())
-    if selection['reference_manifest_sha256'] != expected_reference or len(selection['selected_instances']) != 12:
-        raise RuntimeError('Expected frozen 12-instance selection')
-    selected = {entry['instance']: entry for entry in selection['selected_instances']}
+    selection_source = args.selection_file or args.source / 'configs/pilot-selection.json'
+    selection_path = wave / 'selection.json'
+    shutil.copyfile(selection_source, selection_path)
     references = {entry['instance_name']: entry for entry in reference['instances']}
+    selected = load_selection(selection_path, references, args.expected_count, expected_reference)
     checker = checker_identity()
     if checker != reference['checker']:
         raise RuntimeError('Checker differs from frozen reference')
@@ -207,7 +241,7 @@ def coordinate(args) -> None:
         tasks.append({'wave_id': wave_id, 'task_id': task_id, 'instance_name': name, 'arm': arm, 'horizon_s': args.horizon,
                       'seed': seed if arm in ['kayros-heuristics', 'kayros-full-cplex'] else None,
                       'prefix_s': prefix, 'replicate': repetition,
-                      'host': host, 'cpu_core': available_cores[host][slot], 'memory_mb': 8192,
+                      'host': host, 'cpu_core': available_cores[host][slot], 'memory_mb': args.memory_mb,
                       'instance_path': str(instance), 'instance_sha256': entry['instance_sha256'],
                       'reference_cost': float.fromhex(entry['reference_cost_hex']),
                       'output_directory': str(wave / 'cells'), 'manifest_path': manifests[backend],
@@ -219,7 +253,8 @@ def coordinate(args) -> None:
                 'wave_id': wave_id, 'created_utc': created_utc, 'launch_ready_utc': datetime.now(timezone.utc).isoformat(),
                 'workers_per_host': args.workers_per_host, 'scheduled_count': len(tasks), 'available_concurrent_slots': len(hosts) * args.workers_per_host,
                 'oar_job_id': os.environ['OAR_JOB_ID'], 'reference_manifest_sha256': expected_reference,
-                'selection_sha256': sha256(selection_path), 'horizon_s': args.horizon,
+                'selection_sha256': sha256(selection_path), 'selection_source_path': str(selection_source),
+                'expected_instance_count': args.expected_count, 'horizon_s': args.horizon,
                 'repetition_slots': [{'replicate': repetition, 'paired_heuristic_seed': seed} for repetition, seed in slots],
                 'driver_sha256': sha256(Path(__file__)), 'scheduled_cells': tasks})
     processes = []
@@ -247,6 +282,8 @@ def main():
     parser.add_argument('--mode', choices=['coordinator', 'node'], required=True)
     parser.add_argument('--root', type=Path, default=home / 'ms56-phase2')
     parser.add_argument('--source', type=Path, default=home / 'ms56-phase2/experiment')
+    parser.add_argument('--selection-file', type=Path)
+    parser.add_argument('--expected-count', type=int, default=12)
     parser.add_argument('--inputs', type=Path, default=home / 'ms56-ablation/inputs')
     parser.add_argument('--patch-dir', type=Path, default=home / 'ms56-ablation/experiment/patches')
     parser.add_argument('--checker-python', type=Path, default=home / 'ms56-ablation/experiment/.venv/bin/python')
@@ -256,6 +293,7 @@ def main():
     parser.add_argument('--highs-patch', action='append')
     parser.add_argument('--hosts', nargs='+')
     parser.add_argument('--workers-per-host', type=int, default=16)
+    parser.add_argument('--memory-mb', type=int, default=8192, help='Per-process address-space cap in MiB; node RAM guard remains mandatory')
     parser.add_argument('--horizon', type=float, default=60)
     parser.add_argument('--full-prefixes', type=float, nargs='+', default=[15])
     parser.add_argument('--repetitions', type=int, default=1)

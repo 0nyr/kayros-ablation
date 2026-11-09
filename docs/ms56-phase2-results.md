@@ -41,3 +41,7 @@ The same analysis evaluates trajectories at 25%, 50%, 75% and 100% of the common
 Concrete failed executions or invalid candidates hold the recommendation while preserving their diagnostic ranking and denominator contributions. Closure-census source concerns alone do not impose an additional formal-proof gate. A clean recommendation remains subject to author review before main launch. The matched 300 s replay passes these checks and ranks 15 s first, but the final choice will use the completed 1-hour, 3-trial pilot.
 
 The plotting scripts produce incumbent, computational-closure and prefix trade-off figures, using consistent arm colors. Figure points in the prefix comparison are per-replication averages, not confidence intervals. JSON and CSV companions retain the plotted quantities.
+
+## Native guard visibility correction
+
+The archived 300 s RC105 cold HiGHS cell already records 1 rejected checker-infeasible priced column and the native certificate-poison warning. The earlier summary omitted this field. Updated summaries and closure plots expose the warning without changing the raw artifacts or the qualified solver-reported closure count. Its final emitted incumbent is independently v0.11-valid at 23,376.812597162243, and its CG closure census is 35/35 with zero unresolved closures. The [source and reporting assessment](ms56-rc105-guard.md) explains why this remains a flagged operational closure rather than an unqualified clean computational proof. It also separates the observed rejected column from any hypothetical pricing-completeness failure.

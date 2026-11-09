@@ -3,9 +3,12 @@ from pathlib import Path
 import sys
 import json
 import unittest
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from development_wave import launcher_command, repetition_slots, planned_cells
+from development_wave import launcher_command, repetition_slots, planned_cells, load_selection, claim_node_start
+from prepare_main_schedule import build_templates
+from checker_contract import sha256
 
 
 class DevelopmentWaveTests(unittest.TestCase):
@@ -49,6 +52,63 @@ class DevelopmentWaveTests(unittest.TestCase):
                 self.assertIsNone(cell['seed'])
         self.assertEqual(len(set(commands)), 324)
         self.assertTrue(all(sum(cell['instance_name'] == name for cell in cells) == 27 for name in names))
+
+    def test_main_roster_has_1400_unique_cells_and_pending_configuration(self):
+        project = Path(__file__).resolve().parents[1]
+        manifest_path = project / 'references/dabia2013-n100-v011-2026-11-09/manifest.json'
+        reference = json.loads(manifest_path.read_bytes())
+        selection, inventory = build_templates(reference, sha256(manifest_path))
+        self.assertEqual(len(selection['selected_instances']), 56)
+        self.assertFalse(inventory['launchable'])
+        self.assertIsNone(inventory['common_horizon_s'])
+        tasks = inventory['scheduled_cells']
+        self.assertEqual(len(tasks), 56 * 5 * 5)
+        self.assertEqual(len({task['task_id'] for task in tasks}), 1400)
+        self.assertEqual(len({task['arm'] for task in tasks}), 5)
+        self.assertEqual(inventory['full_arm_configuration_count'], 1)
+        self.assertTrue(all(task['prefix_s'] is None and task['prefix_selection_pending'] for task in tasks if task['arm'] == 'kayros-full-cplex'))
+        for task in tasks:
+            self.assertIn(task['replicate'], [1, 2, 3, 4, 5])
+            if task['arm'] in ['kayros-heuristics', 'kayros-full-cplex']:
+                self.assertEqual(task['seed'], {1:42, 2:123, 3:456, 4:789, 5:2026}[task['replicate']])
+            else:
+                self.assertIsNone(task['seed'])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'selection.json'
+            path.write_text(json.dumps(selection))
+            refs = {entry['instance_name']: entry for entry in reference['instances']}
+            self.assertEqual(len(load_selection(path, refs, 56, sha256(manifest_path))), 56)
+            with self.assertRaises(ValueError):
+                load_selection(path, refs, 12, sha256(manifest_path))
+
+    def test_default_pilot_selection_still_has_12_frozen_instances(self):
+        project = Path(__file__).resolve().parents[1]
+        manifest_path = project / 'references/dabia2013-n100-v011-2026-11-09/manifest.json'
+        reference = json.loads(manifest_path.read_bytes())
+        refs = {entry['instance_name']: entry for entry in reference['instances']}
+        selected = load_selection(project / 'configs/pilot-selection.json', refs, 12, sha256(manifest_path))
+        self.assertEqual(len(selected), 12)
+
+    def test_node_reentry_cannot_overwrite_existing_rows(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave = Path(temporary)
+            (wave / 'rows').mkdir()
+            row = wave / 'rows/fixture.json'
+            row.write_text('preserved outcome')
+            with self.assertRaises(FileExistsError):
+                claim_node_start(wave, [{'task_id':'fixture'}], 'node')
+            self.assertEqual(row.read_text(), 'preserved outcome')
+
+    def test_node_start_claim_is_exclusive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave = Path(temporary)
+            (wave / 'rows').mkdir()
+            claim_node_start(wave, [{'task_id':'fixture'}], 'node')
+            before = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in wave.rglob('*') if path.is_file()}
+            with self.assertRaises(FileExistsError):
+                claim_node_start(wave, [{'task_id':'fixture'}], 'node')
+            after = {str(path): (path.read_bytes(), path.stat().st_mtime_ns) for path in wave.rglob('*') if path.is_file()}
+            self.assertEqual(before, after)
 
     def test_duplicate_prefix_refused(self):
         with self.assertRaises(ValueError):

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import shutil
 import subprocess
 import time
 
@@ -20,6 +21,10 @@ output.parent.mkdir(parents=True, exist_ok=True)
 records = {}
 if output.exists():
     prior = json.loads(output.read_bytes())
+    archive = output.parent / 'revision2-snapshots' / output.name
+    archive.parent.mkdir(exist_ok=True)
+    if not archive.exists():
+        shutil.copyfile(output, archive)
     started = prior['started_utc']
     for record in prior['processes']:
         argv = record['worker_argv']
@@ -37,7 +42,10 @@ def status(pid):
 def field(argv, name):
     return argv[argv.index(name) + 1] if name in argv else None
 
+series = output.with_suffix('.jsonl').open('a')
+series_started = datetime.now(timezone.utc).isoformat()
 for sample in range(args.seconds):
+    observations = []
     found = subprocess.run(['ps', '-u', str(os.getuid()), '-o', 'pid=,args='], capture_output=True, text=True, check=True)
     for line in found.stdout.splitlines():
         pid, _, command = line.strip().partition(' ')
@@ -71,6 +79,8 @@ for sample in range(args.seconds):
                 'first_observed_utc': datetime.now(timezone.utc).isoformat(), 'samples': 0,
                 'max_sampled_tree_rss_kib': 0, 'max_sampled_worker_vm_hwm_kib': 0,
                 'max_sampled_descendant_vm_hwm_sum_kib': 0})
+            observations.append({'worker_pid': int(pid), 'tree_rss_kib': tree_rss,
+                'worker_vm_hwm_kib': int(data.get('VmHWM', '0 kB').split()[0]), 'descendant_vm_hwm_sum_kib': child_hwm})
             record['samples'] += 1
             record['max_sampled_tree_rss_kib'] = max(record['max_sampled_tree_rss_kib'], tree_rss)
             record['max_sampled_worker_vm_hwm_kib'] = max(record['max_sampled_worker_vm_hwm_kib'], int(data.get('VmHWM', '0 kB').split()[0]))
@@ -79,8 +89,11 @@ for sample in range(args.seconds):
         except (OSError, ValueError, KeyError):
             pass
     complete = (args.wave / 'coordinator-complete.json').exists()
+    if sample % 5 == 0 or complete:
+        series.write(json.dumps({'utc': datetime.now(timezone.utc).isoformat(), 'measurement_revision': 3, 'observations': observations}) + '\n')
+        series.flush()
     temporary = output.with_suffix('.json.tmp')
-    temporary.write_text(json.dumps({'measurement_revision': 2, 'monitor_pid': os.getpid(), 'host': socket.gethostname(), 'monitor_cpu': core, 'started_utc': started,
+    temporary.write_text(json.dumps({'measurement_revision': 3, 'series_started_utc': series_started, 'series_interval_s': 5, 'monitor_pid': os.getpid(), 'host': socket.gethostname(), 'monitor_cpu': core, 'started_utc': started,
         'checkpoint_utc': datetime.now(timezone.utc).isoformat(), 'samples': sample + 1, 'sample_interval_s': 1,
         'bound_s': args.seconds, 'wave_complete': complete,
         'measurement': 'Sampled simultaneous worker-plus-descendant RSS. VmHWM fields are supplemental sampled process high-water marks. Short-lived processes before observation can be missed.',
@@ -89,3 +102,4 @@ for sample in range(args.seconds):
     if complete:
         break
     time.sleep(1)
+series.close()

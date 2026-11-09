@@ -31,13 +31,15 @@ def main():
                 byinstance[c['instance_name']].append(float(c['reported_closure_s'] is not None and c['reported_closure_s']<=t))
             fractions.append(sum(sum(v)/len(v) for v in byinstance.values())/len(byinstance))
         label=key.replace('kayros-bpca-cplex','Cold CPLEX').replace('kayros-bpca-highs','Cold HiGHS').replace('kayros-full-cplex','Full CPLEX').replace('lera-exact','Lera CPLEX')
+        warned=sum(c.get('reported_closure_with_native_guard_warning',False) for c in rows)
+        if warned: label+=f' [{warned} guard warnings]'
         ax.step(times,fractions,where='post',label=label,**arm_style(rows[0]['arm'],rows[0].get('prefix_s')))
-        data[key]={'elapsed_s':times,'reported_closure_fraction':fractions}
+        data[key]={'elapsed_s':times,'reported_closure_fraction':fractions,'reported_closures_with_native_guard_warning':warned}
     ax.set(xlabel='Elapsed time from process launch (s)',ylabel='Fraction with reported closure and checked witness',xlim=(0,horizon),ylim=(-.02,1.02))
     ax.grid(alpha=.25)
     ax.set_title(report['wave_name']+' | computational closure under declared conventions')
     fig.legend(*ax.get_legend_handles_labels(),loc='lower center',bbox_to_anchor=(.5,.04),ncol=3,frameon=False)
-    fig.text(.5,.012,'Unfinished runs remain in the denominator. Numerical/pricing conventions and execution diagnostics apply.',ha='center',fontsize=9)
+    fig.text(.5,.012,'All scheduled cells retained. Flagged native guard warnings qualify closure claims. Missing guard evidence is not zero.',ha='center',fontsize=9)
     fig.tight_layout(rect=(0,.23,1,1))
     a.output.mkdir(parents=True,exist_ok=True)
     for ext in ('png','pdf'): fig.savefig(a.output/f'closure-overview.{ext}',dpi=180)
