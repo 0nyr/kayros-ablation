@@ -27,13 +27,27 @@ def interval_mean_gap(envelope, reference, start, end):
     return (end * last['lambda'] - start * first['lambda']) / (end - start)
 
 
-def read_envelope(wave, cell):
+def read_result(wave, cell):
     if not cell['run_id']:
-        return []
+        return {}
     result = json.loads((wave / 'cells' / cell['run_id'] / 'result.json').read_bytes())
     if result['run_id'] != cell['run_id']:
         raise ValueError('Result identity mismatch')
-    return result.get('validation', {}).get('checked_envelope', [])
+    return result
+
+
+def review_reasons(cell, result):
+    reasons = []
+    if cell.get('invalid_candidate_count', 0):
+        reasons.append('invalid_candidates')
+    if result.get('issues') or result.get('validation_failure'):
+        reasons.append('result_or_validation_issues')
+    if cell.get('resource_closure_conflict'):
+        reasons.append('resource_outcome_with_closure_or_proof_claim')
+    if cell['status'] not in ('completed', 'deadline') and not (
+            cell['status'] == 'failed' and cell.get('resource_failure_kind')):
+        reasons.append('unclassified_failure_or_incomplete_record')
+    return reasons
 
 
 def review(full, focused, full_wave, focused_wave):
@@ -69,8 +83,9 @@ def review(full, focused, full_wave, focused_wave):
         if other is None or (cell['seed'], cell['instance_sha256'], cell['reference_cost']) != (
                 other['seed'], other['instance_sha256'], other['reference_cost']):
             raise ValueError('Focused cell lacks its exact panel counterpart')
-        envelope = read_envelope(focused_wave, cell)
-        original = read_envelope(full_wave, other)
+        focused_result = read_result(focused_wave, cell)
+        envelope = focused_result.get('validation', {}).get('checked_envelope', [])
+        original = read_result(full_wave, other).get('validation', {}).get('checked_envelope', [])
         a = checkpoint(original, cell['reference_cost'], start)
         b = checkpoint(envelope, cell['reference_cost'], start)
         c = checkpoint(envelope, cell['reference_cost'], end)
@@ -80,6 +95,8 @@ def review(full, focused, full_wave, focused_wave):
             'prefix_s': cell.get('prefix_s'), 'replicate': cell['replicate'],
             'full_run_id': other['run_id'], 'focused_run_id': cell['run_id'],
             'full_status': other['status'], 'focused_status': cell['status'],
+            'focused_resource_failure_kind': cell.get('resource_failure_kind'),
+            'focused_review_reasons': review_reasons(cell, focused_result),
             'full_horizon_mean_gap': a['lambda'],
             'focused_first_interval_mean_gap': b['lambda'],
             'focused_second_interval_mean_gap': interval_mean_gap(envelope, cell['reference_cost'], start, end),
@@ -114,6 +131,8 @@ def review(full, focused, full_wave, focused_wave):
         'full_wave': full['wave_name'], 'focused_wave': focused['wave_name'],
         'full_horizon_s': start, 'focused_horizon_s': end, 'memory_limit_mib': caps.pop(),
         'focused_instances': sorted(focus_instances), 'groups': groups, 'cells': rows,
+        'recommendation_eligible': not any(row['focused_review_reasons'] for row in rows),
+        'review_required_cells': [row for row in rows if row['focused_review_reasons']],
         'global_prefix_selection': 'Not performed here. Use the complete full-panel selection analysis.',
         'interpretation': [
             'Focused cases were selected from the observed allocation failures and are reported separately.',
