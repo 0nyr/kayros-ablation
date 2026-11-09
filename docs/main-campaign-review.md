@@ -1,6 +1,6 @@
 # Main-campaign readiness review
 
-Status: the completed 8 GiB pilot is a valid bounded-resource experiment, including its 2 allocation failures. The author requested an additional full-panel resource-budget comparison and a focused 2-hour follow-up, on separate nodes, and then requested more memory per process. Both follow-ups use 16 GiB and 10 workers per node. These are separate experiments, not repairs or replacements of the 8 GiB observations. Expected resource failures do not automatically invalidate a ranking or veto readiness. Main launch remains held for the originally required author review. No main reservation has been submitted.
+Status: both complete 1-hour panels select prefix 15 s under the approved rule. The [16 GiB report](ms56-hour-pilot-16g.md) covers all 324 cells, with no allocation failures or invalid retained candidates. Its 33-host allocation is released. The separate 54-cell, 2-hour follow-up remains active at 16 GiB on 6 hosts. These are separate experiments, not repairs or replacements of the valid 8 GiB observations. Expected resource failures remain measured outcomes and do not automatically veto readiness. Main launch awaits the focused horizon evidence and the originally required author inspection. No main reservation has been submitted.
 
 ## Authorized resource follow-ups
 
@@ -16,7 +16,7 @@ We test whether Kayros improves on the original Lera-Romero baseline on the 56 o
 
 The five arms are original Lera CPLEX, cold Kayros CPLEX, cold Kayros HiGHS, standalone Kayros ILS, and one fixed ILS prefix followed by warm Kayros CPLEX. Every arm has 5 trials per instance. The two heuristic-containing arms share seeds 42, 123, 456, 789 and 2026 by trial. Cold exact trials are runtime replications with null search seeds. One global prefix applies to every instance and seed.
 
-The matched 300 s pilot supports strong incumbent-quality benefits from heuristic-containing arms. Original Lera has the better restricted mean computational-closure time there. The main experiment must preserve this distinction and report unfavorable outcomes as well as favorable ones. The [intermediate report](ms56-phase2-results.md) and [native-work comparison](ms56-native-work-comparison.md) provide the measured evidence and its limitations.
+The 16 GiB, 1-hour panel confirms the anytime incumbent-quality benefit of heuristic-containing arms. Full15 has incumbents in 36/36 cells and mean Λ 0.005857, compared with Lera's 27/36 and 0.387223. Lera leads on reported closure count/time (21 and 1696.057 s, versus 19 and 1872.030 s) and reaches the final 1% reference-gap threshold more often (27 versus 25). Full600 reaches that threshold in 33 cells and has the lowest Λ, but the approved primary closure-time criterion selects 15 s. The main experiment must preserve these distinctions and report unfavorable outcomes as well as favorable ones. The [complete report](ms56-hour-pilot-16g.md) and [native-work comparison](ms56-native-work-comparison.md) provide the measured evidence and its limitations.
 
 The [RC105 guard assessment](ms56-rc105-guard.md) records a native rejected-column warning in cold HiGHS. Its independently checked terminal objective agrees with the other exact arms and the frozen reference, but the warning retains its stricter certificate-poison meaning. Report these closures with an explicit qualification. The warning is present in the 300 s archive and in all 3 completed RC105 HiGHS pilot trials. No invalid emitted incumbent or material bound/objective contradiction has been observed in those cells.
 
@@ -24,9 +24,9 @@ The [RC105 guard assessment](ms56-rc105-guard.md) records a native rejected-colu
 
 | Item | Rule or current proposal | Evidence still required |
 |---|---|---|
-| Global full-arm prefix | Minimum restricted mean reported computational-closure time, then mean Λ, then shorter prefix | Complete 16 GiB, 3-trial comparison of 15, 60, 180, 600 and 1,800 s. The completed 8 GiB ranking remains valid for its resource budget. |
+| Global full-arm prefix | Selected 15 s by restricted mean closure time, then mean Λ, then shorter prefix | Complete at both 8 and 16 GiB. At 16 GiB, 15 wins all 12 leave-one-instance-out checks and 2 of 3 replications. |
 | Common horizon | Provisional 7,200 s from process launch | Same-wave horizon checkpoints, last-quarter incumbent/closure progress, execution health |
-| Memory cap and workers per node | Follow-ups use 16 GiB × 10 workers | Their final per-process virtual-memory and RSS observations, plus actual node RAM guard |
+| Memory cap and workers per node | Follow-ups use 16 GiB × 10 workers | Full-panel observed VmPeak reaches 10.734 GiB, with 5 observed cells above 8 GiB. Await the separate 2-hour resource trajectory. |
 | Full schedule | 56 instances × 5 arms × 5 trials = 1,400 cells | Offline schedule identity checks and frozen runtime/source inventories |
 | Main launch | Author inspection of pilot plots and recommendation | Completed pilot review |
 
@@ -43,7 +43,7 @@ At a 2-hour horizon, the design has at most 2,800 solver core-hours. Total job w
 | 40 | 10 | 400 | 4 | 8 h 30 min |
 | 33 | 10 | 330 | 5 | 10 h 30 min |
 
-Each process receives one distinct allowed CPU, one backend thread and the declared address-space limit. The node guard checks the configured caps plus its RAM reserve against actual memory. The final shape must use current free capacity and the real OAR nodefile. A smaller worker count can increase memory headroom without increasing the number of rounds when enough hosts are available. We will release the pilot reservation after archival and release main resources as soon as their assigned work is complete.
+Each process receives one distinct allowed CPU, one backend thread and the declared address-space limit. The node guard checks the configured caps plus its RAM reserve against actual memory. The final shape must use current free capacity and the real OAR nodefile. A smaller worker count can increase memory headroom without increasing the number of rounds when enough hosts are available. Completed reservations are released after process/observer checks. Shared-home archival does not require retaining idle compute nodes.
 
 The official grvingt status API at approximately 11:00 CET reported 38 alive/busy nodes (including the 21 pilot hosts), 6 alive/free, 14 standby/free, 1 free with best-effort work, 3 dead and 2 absent. Counting the pilot hosts after their release gives approximately 41 clearly usable hosts before other allocations change. With the updated 10-worker shape, 40 hosts require 4 worst-case main rounds. Capacity will be checked again after the author review. No main allocation is implied by this snapshot.
 

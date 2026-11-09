@@ -1,5 +1,5 @@
 {
-  "status": "pilot_running_main_held_for_review",
+  "status": "focused_pilot_running_main_held_for_review",
   "kayros": {
     "version": "1.6.1",
     "commit": "50eebc57964ac4f6762719ff21033783a31c12da",
@@ -65,7 +65,8 @@
         "memory_limit_mib": 16384,
         "hosts": 33,
         "maximum_workers_per_host": 10,
-        "purpose": "matched global prefix selection under revised resources"
+        "purpose": "matched global prefix selection under revised resources",
+        "status": "completed_all_324_cells"
       },
       {
         "wave_name": "focused7200-16g-seeds3",
@@ -80,7 +81,8 @@
         "memory_limit_mib": 16384,
         "hosts": 6,
         "maximum_workers_per_host": 10,
-        "purpose": "separate targeted horizon and memory sensitivity"
+        "purpose": "separate targeted horizon and memory sensitivity",
+        "status": "running"
       }
     ]
   },
@@ -151,7 +153,7 @@
       600,
       1800
     ],
-    "selected_prefix_seconds": null,
+    "selected_prefix_seconds": 15,
     "stagnation_early_handoff": false,
     "prefix_clock_origin": "process_launch",
     "selection_order": [
@@ -159,7 +161,13 @@
       "minimum_mean_primal_integral",
       "shorter_prefix"
     ],
-    "closure_scope": "declared numerical conventions, checked in-budget witness and disclosed execution diagnostics; see docs/pilot-proof-parameters.md"
+    "closure_scope": "declared numerical conventions, checked in-budget witness and disclosed execution diagnostics; see docs/pilot-proof-parameters.md",
+    "selection_evidence": {
+      "wave_name": "repeat3600-16g-seeds3",
+      "wave_id": "101496d713584bf0bb99b44dc96644b3",
+      "decision_path": "outputs/ms56-phase3/repeat3600-16g-seeds3/analysis/decision.json",
+      "decision_sha256": "7e97b69f811fc8b584da7dfe9b6936fa908a2c583224732dd45f6af2eb8dcd57"
+    }
   },
   "proof_timing": "solver_proof_completion",
   "external_audit_time": {
@@ -167,9 +175,7 @@
     "reported": false
   },
   "pending": [
-    "completed_matched_16g_one_hour_pilot",
     "completed_focused_16g_two_hour_pilot",
-    "selected_prefix_duration",
     "main_horizon_and_resource_shape",
     "main_frozen_manifest_and_author_review"
   ]
