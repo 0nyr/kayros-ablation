@@ -74,3 +74,9 @@ The main study cannot demonstrate general exact-solver scalability or every step
 ## Implementation ruling (ms56)
 
 The fixed heuristic prefix deadline is measured from process launch. Loading and initialization consume part of the prefix, and all phases share the total process-launch deadline. This origin was confirmed before prefix probes. The main campaign remains held for author inspection of probe results and recommendations.
+
+## Computational closure scope (ms56 phase 2)
+
+The baseline comparison follows the declared Lera-Romero/Kayros numerical and algorithmic conventions. Its scientific question does not require formally verified proof objects. The manuscript defines a computational certificate as search closure under canonical binary64 route evaluation, backend LP tolerances and vendored pricing epsilon comparisons. Post-run route checking verifies feasibility and cost, not the search tree.
+
+Following the author's clarification, intermediate analyses report solver-reported closure with a checked in-budget witness, alongside closure census and integrity diagnostics. This observational series is distinct from the stricter independent audit field in early probe artifacts. A source-level suspicion is recorded and investigated without automatically blocking pilots. A demonstrated major wrong result, invalid witness, contradictory bound or known unsafe execution requires repair and re-evaluation before the main campaign. Do not erase or conceal such evidence to support the superiority hypothesis. Manuscript and appendix claims must retain this computational scope.

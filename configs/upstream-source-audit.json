@@ -1,0 +1,14 @@
+{
+  "source_commit": "cabc56ad9cdb22bed81a8a31f1671d40152055e6",
+  "path": "code/src/bcp/bcp.cpp",
+  "raw_sha256": "22f7c76ccd7dd704371b9f54ef8d2ffbe89f57d546c0edd2b89e6c2d684fd53d",
+  "lines": [
+    329,
+    330
+  ],
+  "source_text": [
+    "if (epsilon_bigger(best_violation, 0.1)) spf->AddCut(best);",
+    "return epsilon_bigger(best_violation, 0.1);"
+  ],
+  "finding": "The chosen immutable upstream pin uses the same 0.1 threshold as Kayros. Earlier generic positive 0 comparison recommendations are superseded."
+}
