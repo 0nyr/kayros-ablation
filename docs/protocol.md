@@ -6,11 +6,13 @@ Status: design in progress. This protocol distinguishes approved choices from pr
 
 Use Kayros v1.6.1 with separately documented necessary fixes, the original upstream Lera-Romero source, and classic mamut-routing-lib v0.11.0 for all cost evaluation. Main performance comparisons use the 56 original Dabia2013 TDVRPTW instances with 100 customers and the Duration objective. Preserve the materialized original distance/speed conventions and verify representation equivalence across solver adapters.
 
-Compare 4 arms: original exact solver, cold Kayros exact component, standalone Kayros ILS, and an ILS prefix followed by warm-started Kayros exact search. Charge the prefix and handoff to the full arm's single total budget. The full arm receives only its own in-budget incumbent. Stored reference solutions do not initialize the headline cold arms. Keep native pricing heuristics inside the exact solvers.
+Compare 5 arms: original Lera-Romero exact solver with CPLEX, cold Kayros exact with CPLEX, cold Kayros exact with HiGHS, standalone Kayros ILS, and an ILS prefix followed by warm-started Kayros exact with CPLEX. Charge the prefix and handoff to the full arm's single total budget. The full arm receives only its own in-budget incumbent. Stored reference solutions do not initialize the headline cold arms. Keep native pricing heuristics inside the exact solvers.
 
-Add controlled comparisons matching LP backend and cut settings. Exact intermediate components require a source and patch-dependency audit. Preserve the distinction between reused methods/code, adaptations, correctness repairs and new components. Known incorrect variants can supply regression evidence but cannot receive successful proof credit.
+Use CPLEX for the main exact comparisons to match the original solver's backend. This is a choice of experimental control, not a claim that CPLEX is faster. The additional cold Kayros HiGHS arm isolates backend replacement with matched algorithmic parameters, cut settings, thread limits and comparable numerical settings. Record backend-specific settings and any unavoidable differences. No algorithmic addition bundles, finer component ablations or separate cut-setting interventions are planned. Provenance documentation still distinguishes reused methods/code, adaptations, correctness repairs and new components. Known incorrect variants can supply regression evidence but cannot receive successful proof credit.
 
 Initial correctness tests may use n25/n50 subsets, with 1 or 3 trials. A 1-hour pilot on 12 n100 instances precedes a provisional 2-hour main campaign on all 56. Main arms have 5 trials per instance. Use 5 actual ILS seeds for heuristic and full arms, paired by trial. Record cold exact trials as timing replications where the API has no random-seed control. Do not claim that changing a metadata seed changes a deterministic algorithm. The actual seed identifiers will be frozen in the manifest.
+
+With 5 arms, 56 instances and 5 trials, the final design has 1,400 cells and at most 2,800 solver core-hours at a 2-hour horizon. This counts one selected full-arm prefix configuration. The pilot's prefix comparison is additional development work.
 
 ## Proof time and validation
 
@@ -18,7 +20,13 @@ Record the event at which the solver declares completed optimality proof, using 
 
 Solver-internal feasibility checks, numerical operations and integrity guards remain part of the computation being measured. Post-run route validation cannot establish pricing completeness. Preserve solver termination, exact-pricing evidence, bounds, witness routes and numerical parameters to support the declared acceptance checks. Store-admission protocols remain distinct from one run's proof-completion event.
 
-The precise common clock origin remains to settle. The proposed clock includes loading/preprocessing and the complete heuristic/exact computation, but excludes post-run external checking. A native BPCA timer beginning after preprocessing must not silently be compared with another arm's broader timer. Events genuinely after the horizon do not earn success through timestamp clamping.
+The common clock starts at process launch with the environment prepared. It includes imports, instance loading, preprocessing and the complete heuristic/exact computation, and excludes post-run external checking. Rebase native BPCA timestamps that begin after preprocessing onto this common clock. Events genuinely after the horizon do not earn success through timestamp clamping.
+
+## Reference snapshot and heuristic prefix
+
+Freeze the latest available reference solutions before the pilot, after complete validation and cost evaluation under the pinned v0.11 checker. Retain reference routes, original records, instance identities, input hashes and checker provenance. Use the same immutable snapshot across all arms, prefix candidates and deadlines. Later improvements may give negative primal gaps. Stored optimality annotations remain provenance separate from the primal reference cost and do not prove a new run's optimality. The [snapshot](../references/dabia2013-n100-v011-2026-11-09/README.md) is constructed and independently replayed: all 56 references are valid, with 11 source-declared costs repriced and every route unchanged. Its manifest SHA-256 is `ea7310862b191655ff3109ee303afdd9dd420664da4ebb82ea30790ac415af66`. Campaign consumers must pin that digest rather than accepting a replacement manifest.
+
+Compare fixed heuristic prefixes of 15, 60, 180, 600 and 1,800 seconds in the pilot. Handoff to CPLEX BPCA occurs at the selected prefix deadline. No convergence or stagnation detector changes this schedule. Pair ILS seeds across prefix candidates and standalone heuristic runs, and choose one final full-arm configuration before the main campaign.
 
 ## Primal metrics
 
@@ -30,7 +38,7 @@ Report mean Λ, mean final squeezed gap, feasible-run counts and reference-attai
 
 ## Exact metrics
 
-The proof-attainment curve gives the fraction of all trials that complete an accepted proof by each deadline. Heuristic-only search has no proof capability. Restrict proof rankings to exact-capable arms, while retaining all 4 arms in incumbent and status comparisons.
+The proof-attainment curve gives the fraction of all trials that complete an accepted proof by each deadline. Heuristic-only search has no proof capability. Restrict proof rankings to the 4 exact-capable arms, while retaining all 5 arms in incumbent and status comparisons.
 
 The restricted mean time to proof is the area under the unproved fraction over the common horizon. Equivalently, average each proof time capped at the horizon, assigning the full horizon to runs without an accepted proof. Report the horizon and proof count alongside this scalar. It does not estimate eventual uncensored mean runtime and is not Λ.
 
@@ -48,9 +56,9 @@ Preserve streamed candidate routes and timestamps, native and checked objective 
 
 ## Open choices
 
-1. Clock origin: process launch with a prepared environment, solver API entry before loading/preprocessing, or a narrower native solve timer. Recommend a common end-to-end solver clock including preprocessing, with external checks outside it.
-2. Reference snapshot: freeze current v0.11-validated BKS routes before the pilot, or score against a shared post-campaign reference. Recommend the pre-campaign snapshot for component attribution, permitting negative gaps.
-3. Heuristic prefix: fix a duration directly or compare 15/60/180 seconds in the pilot. Recommend selecting one global duration from the pilot and freezing it before the main campaign.
-4. Component granularity: reconstruct a small number of auditable addition bundles, or attempt a finer historical patch ladder. Recommend meaningful bundles after examining dependencies, with matched backend/cut comparisons retained.
+1. Prespecify how the 5 fixed prefixes and accepted proof outcomes select one global final configuration, including a tie rule and the incumbent-quality trade-off.
+2. Complete the detailed cross-solver proof-acceptance checks and matched backend parameter manifest before launch.
+
+Process-launch timing, the pre-pilot reference policy, the 5-arm design, fixed prefix scheduling and exclusion of finer algorithmic ablations are settled. The reference snapshot is frozen and independently replayed. Campaign consumers must retain its pinned identity.
 
 The main study cannot demonstrate general exact-solver scalability or every stepwise/numerical repair. Separate correctness witnesses document changes outside the n100 panel's scope.

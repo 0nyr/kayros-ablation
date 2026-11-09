@@ -1,0 +1,206 @@
+{
+  "status": "valid",
+  "routing_cost": 21802.17873091952,
+  "num_routes": 14,
+  "error_message": "",
+  "route_evaluations": [
+    {
+      "route": [
+        2,
+        15,
+        57,
+        87,
+        97,
+        96,
+        91,
+        100,
+        93,
+        58
+      ],
+      "feasible": true,
+      "duration": 1825.8036707044653,
+      "departure_time": 441.6964980459567
+    },
+    {
+      "route": [
+        5,
+        83,
+        45,
+        61,
+        84,
+        86,
+        37,
+        17,
+        60,
+        89
+      ],
+      "feasible": true,
+      "duration": 2090.1665112991645,
+      "departure_time": 57.333333333333286
+    },
+    {
+      "route": [
+        27,
+        69,
+        31,
+        62,
+        88,
+        90,
+        10
+      ],
+      "feasible": true,
+      "duration": 1344.0005025024711,
+      "departure_time": 220.0
+    },
+    {
+      "route": [
+        28,
+        12,
+        76,
+        81,
+        9,
+        34,
+        35,
+        32,
+        70
+      ],
+      "feasible": true,
+      "duration": 1934.3325481164013,
+      "departure_time": 237.3334642852735
+    },
+    {
+      "route": [
+        33,
+        29,
+        78,
+        79,
+        3,
+        50
+      ],
+      "feasible": true,
+      "duration": 1289.4138831696516,
+      "departure_time": 248.28631918194517
+    },
+    {
+      "route": [
+        39,
+        23,
+        75,
+        67,
+        54,
+        55,
+        4,
+        25
+      ],
+      "feasible": true,
+      "duration": 2027.1353259341836,
+      "departure_time": 146.62979372959353
+    },
+    {
+      "route": [
+        40,
+        53,
+        26,
+        68,
+        24,
+        80,
+        77
+      ],
+      "feasible": true,
+      "duration": 1340.6563199528593,
+      "departure_time": 865.2003095993807
+    },
+    {
+      "route": [
+        42,
+        14,
+        44,
+        16,
+        38,
+        43,
+        13
+      ],
+      "feasible": true,
+      "duration": 1696.9007947307796,
+      "departure_time": 18.30000734954168
+    },
+    {
+      "route": [
+        47,
+        36,
+        19,
+        8
+      ],
+      "feasible": true,
+      "duration": 1298.899872951819,
+      "departure_time": 71.9998439998439
+    },
+    {
+      "route": [
+        52,
+        82,
+        7,
+        18
+      ],
+      "feasible": true,
+      "duration": 809.2999733177863,
+      "departure_time": 454.00013333333334
+    },
+    {
+      "route": [
+        59,
+        95,
+        92,
+        98,
+        99,
+        85,
+        94,
+        6
+      ],
+      "feasible": true,
+      "duration": 1286.4664280676163,
+      "departure_time": 37.333373333253334
+    },
+    {
+      "route": [
+        63,
+        11,
+        64,
+        49,
+        46,
+        48
+      ],
+      "feasible": true,
+      "duration": 1746.3922330775606,
+      "departure_time": 135.8573975465161
+    },
+    {
+      "route": [
+        65,
+        71,
+        30,
+        51,
+        66,
+        20,
+        1
+      ],
+      "feasible": true,
+      "duration": 1757.225892993547,
+      "departure_time": 147.33333333333331
+    },
+    {
+      "route": [
+        72,
+        21,
+        73,
+        41,
+        22,
+        56,
+        74
+      ],
+      "feasible": true,
+      "duration": 1355.48477410122,
+      "departure_time": 293.08620141027853
+    }
+  ]
+}

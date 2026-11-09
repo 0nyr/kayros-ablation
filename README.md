@@ -1,6 +1,6 @@
 # Kayros ablation experiments
 
-This repository studies the contributions of Kayros's exact component and its cooperation with heuristic search for the Time-Dependent Vehicle Routing Problem with Time Windows (TDVRPTW). We compare the original Lera-Romero solver, Kayros's exact component, its standalone heuristic and a heuristic prefix followed by exact search. Controlled comparisons will distinguish changes to the LP backend and cut settings from other implementation changes.
+This repository studies Kayros's exact component and its cooperation with heuristic search for the Time-Dependent Vehicle Routing Problem with Time Windows (TDVRPTW). We compare the original Lera-Romero solver, Kayros's exact component with 2 Linear Programming (LP) backends, its standalone heuristic and a heuristic prefix followed by exact search. CPLEX is the main exact backend to match the original solver, independently of any presumed speed advantage. A separate cold Kayros arm uses HiGHS under otherwise matched parameters. Finer algorithmic ablations are outside the study's scope.
 
 The project is at the protocol and implementation-preparation stage. The synthetic example runs now. Campaign runners, solver instrumentation and measured results are not yet available.
 
@@ -10,16 +10,19 @@ The main panel contains all 56 original Dabia2013 TDVRPTW instances with 100 cus
 
 | Arm | Definition |
 |---|---|
-| `lera-exact` | Original upstream solver, with separately recorded build and instrumentation patches |
-| `kayros-bpca` | Kayros v1.6.1 exact component, cold start |
+| `lera-exact` | Original upstream solver with CPLEX, with separately recorded build and instrumentation patches |
+| `kayros-bpca-cplex` | Kayros v1.6.1 exact component with CPLEX, cold start |
+| `kayros-bpca-highs` | The same cold Kayros exact component with HiGHS and matched algorithmic parameters |
 | `kayros-heuristics` | Kayros v1.6.1 Iterated Local Search (ILS) |
-| `kayros-full` | ILS prefix followed by warm-started exact search within one total budget |
+| `kayros-full-cplex` | ILS prefix followed by warm-started CPLEX exact search within one total budget |
 
-The final experiment uses 5 trials per instance and arm. ILS and full Kayros use 5 random seeds. The current cold exact APIs have no seed argument, so their trials must be recorded as timing replications unless a documented randomization control is introduced. Initial checks use 1 or 3 trials. The prefix duration, precise clock boundary, reference snapshot and intermediate component configurations remain open.
+The final experiment uses 5 trials per instance and arm, giving 1,400 cells across the 5 arms and 56 instances, with an upper budget of 2,800 solver core-hours at the provisional 2-hour horizon. ILS and full Kayros use 5 random seeds. The current cold exact APIs have no seed argument, so their trials are recorded as timing replications. Initial checks use 1 or 3 trials. The pilot will compare fixed heuristic prefixes of 15, 60, 180, 600 and 1,800 seconds. Handoff occurs at the selected prefix deadline, without convergence or stagnation detection. The final prefix configuration will be selected before the main campaign.
 
 ## Evaluation contract
 
 Every real solution cost and reference value must be evaluated with **mamut-routing-lib v0.11.0**, pinned to commit `425dff351fdd9522ea6bb8c537dd416dfcd19614`. Use complete solution validation, not a cost-only helper. Record the built artifact identity and verify the imported checker in each worker and analysis process. The newer checker is outside this study's contract.
+
+The common solver clock starts at process launch with the environment prepared, including imports, instance loading, preprocessing and all solver phases. The latest available reference solutions are frozen in the [pre-pilot snapshot](references/dabia2013-n100-v011-2026-11-09/README.md). Independent replay validates all 56 references under v0.11. Repricing changes 11 source-declared costs while preserving the routes.
 
 Incumbent evaluation uses mean squeezed-gap curves, raw gap-goal attainment, the Normalized Signed Primal Integral Λ and final gaps. Exact evaluation adds proof-attainment curves, restricted mean time to proof, global primal–dual gap trajectories and aligned instance-status plots. See the [protocol](docs/protocol.md).
 
@@ -43,9 +46,11 @@ This writes a PDF, PNG and JSON summary. The costs and proof events are invented
 | `docs/protocol.md` | Agreed design and remaining scientific choices |
 | `configs/source_pins.json` | Source identities and draft campaign settings, with unresolved artifacts marked explicitly |
 | `analysis/metric_demo.py` | Reproducible synthetic illustration |
+| `scripts/` | Pinned-checker guard, reference snapshot creation and replay |
+| `references/` | Frozen source witnesses, v0.11 reference solutions and validation records |
 | `outputs/` | Generated local outputs, ignored by Git |
 
-Solver binaries, licensed dependencies, benchmark data and real run outputs are not bundled. A campaign manifest will record their identities before execution. The checked-in source-pin file is deliberately marked `design_only_not_launchable` while artifact and input hashes remain unresolved.
+Solver binaries, licensed dependencies, full instance/ATF data and real solver-run outputs are not bundled. Reference solutions and their validation records are included. Input and reference identities are pinned in the snapshot manifest. The checked-in source-pin file remains `design_only_not_launchable` while solver builds, instrumentation and final campaign settings remain unfinished.
 
 ## Sources and attribution
 

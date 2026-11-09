@@ -8,5 +8,8 @@ license = "MIT"
 authors = [{ name = "Florian Rascoussier" }]
 dependencies = ["matplotlib>=3.9,<4"]
 
+[project.optional-dependencies]
+checker = ["mamut-routing-lib @ git+https://github.com/ANR-MAMUT/MAMUT-routing-lib.git@425dff351fdd9522ea6bb8c537dd416dfcd19614"]
+
 [tool.uv]
 package = false

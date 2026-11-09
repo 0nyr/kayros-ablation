@@ -1,0 +1,39 @@
+{
+    "instance_name": "C102",
+    "routes": [
+        [13, 17, 18, 19, 15, 16, 14, 12],
+        [20, 24, 25, 27, 29, 30, 28, 26, 23, 22, 21],
+        [32, 33, 31, 35, 37, 38, 39, 36, 34],
+        [43, 42, 41, 40, 44, 46, 45, 48, 51, 50, 52, 49, 47],
+        [57, 55, 54, 53, 56, 58, 60, 59],
+        [67, 65, 63, 62, 74, 72, 61, 64, 68, 66, 69],
+        [75, 5, 8, 10, 11, 9, 6, 4, 2, 1, 7, 3],
+        [81, 78, 76, 71, 70, 73, 77, 79, 80, 91],
+        [90, 87, 86, 83, 82, 84, 85, 88, 89],
+        [94, 95, 96, 92, 93, 97, 100, 99, 98]
+    ],
+    "cost": 97662.59605672678,
+    "metadata": {
+        "authors": "Florian Rascoussier (0nyr)",
+        "source": "Lera-Romero et al. 2020 (linear edge costs) published solutions",
+        "validated_by": "mamut-routing-lib td Duration checker",
+        "date": "2026-07-02",
+        "route_durations": [8155.7151632474815, 10315.464137365072, 8903.594542052952, 12326.928369312165, 8109.589868943271, 10528.809552830706, 11400.035592275455, 10242.438614445698, 8755.12847653674, 8924.891739717234],
+        "route_departure_times": [0.0, 236.28606161040574, 313.2619747865202, 0.0, 0.0, 0.0, 796.8576032639908, 63.71544652729568, 0.0, 1173.7334665331123],
+        "published_duration_sum": 97662.59605672679,
+        "optimality": {
+            "proven": true,
+            "prover": "kayros 1.5.1 lera branch-price-and-cut (HiGHS backend; campaign build commit df05a37, behavior-identical to release v1.5.1)",
+            "certificate": "Optimal under checker-exact route costs and standard LP/pricing tolerances. Certified by four independent solves (cold and warm starts x asymmetric and symmetric labeling modes) agreeing on the value, each with an audited exact-pricing phase and zero checker-infeasible priced columns.",
+            "date": "2026-08-06",
+            "arithmetic": "checker-exact route costs (IEEE-754 doubles, canonical route order); the proven optimum equals compute_solution_cost of the stored routes bit-exactly",
+            "proven_optimum": 97662.59605672678,
+            "dual_bound": 97662.59605672678,
+            "wall_time_s": 174.32,
+            "time_limit_s": 7200.0,
+            "checker": "mamut-routing-lib td Duration checker",
+            "campaign": "2026-08-06 full TD re-certification on Grid'5000 abaca (job 6830467 + memory retry 6830998)"
+        }
+    },
+    "objective_function": "Duration"
+}
