@@ -31,3 +31,13 @@ All 84 cells ran concurrently on 6 grvingt hosts with 14 distinct cores per host
 The full 56-instance representation audit found exact agreement in checked metadata and a maximum arrival-function discrepancy of approximately 3.64e-12 across 10,340,020 finite union-knot/midpoint samples. No excluded native-domain sample arrives within the common depot horizon. These are numerical representation checks under the implemented model, not formal real-arithmetic equivalence proofs.
 
 The next pilot retains all 5 proposed prefixes and 3 paired trials under a common 3,600 s horizon. Its purpose is to assess prefix stability, native closure progression, incumbent saturation and memory growth before choosing a main horizon. Numerical settings and source/runtime identities are frozen for that wave. Main-manuscript and appendix revisions await validated full-experiment results.
+
+## Prefix and horizon decision analysis
+
+The [decision analysis](../analysis/pilot_decision.py) requires a completed wave and retains every scheduled cell. It ranks the full-arm prefixes by restricted mean computational-closure time, then mean Λ, then prefix duration. Ties are exact ties of the computed aggregates, with no post-hoc equivalence margin. Per-replication and leave-one-instance-out rankings describe sensitivity and do not change that ordering. The pilot panel is selected for design, so these are descriptive checks rather than population confidence intervals.
+
+The same analysis evaluates trajectories at 25%, 50%, 75% and 100% of the common horizon and records incumbent improvements and closures in the last quarter. These are censored views of the same executions. A prefix longer than an early checkpoint has not reached exact search there. Lack of late progress cannot establish behavior beyond the observed horizon.
+
+Concrete failed executions or invalid candidates hold the recommendation while preserving their diagnostic ranking and denominator contributions. Closure-census source concerns alone do not impose an additional formal-proof gate. A clean recommendation remains subject to author review before main launch. The matched 300 s replay passes these checks and ranks 15 s first, but the final choice will use the completed 1-hour, 3-trial pilot.
+
+The plotting scripts produce incumbent, computational-closure and prefix trade-off figures, using consistent arm colors. Figure points in the prefix comparison are per-replication averages, not confidence intervals. JSON and CSV companions retain the plotted quantities.
