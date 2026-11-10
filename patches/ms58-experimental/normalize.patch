@@ -1,0 +1,345 @@
+diff --git a/cpp/lera/main/include/labeling/normalize_pwl.h b/cpp/lera/main/include/labeling/normalize_pwl.h
+new file mode 100644
+index 0000000..78e0ea0
+--- /dev/null
++++ b/cpp/lera/main/include/labeling/normalize_pwl.h
+@@ -0,0 +1,36 @@
++#pragma once
++
++#include <algorithm>
++#include <utility>
++
++#include "goc/math/pwl_function.h"
++
++namespace solver
++{
++// Repair epsilon-dust piece misordering without copying a well-formed function.
++// Keep the existing boundary scan and reconstruction arithmetic unchanged.
++inline void normalize_pwl(goc::PWLFunction& f)
++{
++    bool ok = true;
++    double hi = -goc::INFTY;
++    for (int k = 0; k < f.PieceCount(); ++k)
++    {
++        const goc::Interval& d = f.Piece(k).domain;
++        if (d.left < hi || d.right < d.left) { ok = false; break; }
++        hi = d.right;
++    }
++    if (ok) return;
++    goc::PWLFunction g;
++    hi = -goc::INFTY;
++    for (int k = 0; k < f.PieceCount(); ++k)
++    {
++        const goc::LinearFunction& p = f.Piece(k);
++        double l = std::max(p.domain.left, hi);
++        double r = p.domain.right;
++        if (r < l) continue;
++        g.AddPiece(goc::LinearFunction({l, p.Value(l)}, {r, p.Value(r)}));
++        hi = r;
++    }
++    f = std::move(g);
++}
++} // namespace solver
+diff --git a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+index 8dddf33..c0ff512 100644
+--- a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+@@ -9,6 +9,7 @@
+ #include <climits>
+ 
+ #include "labeling/pwl_domination_function.h"
++#include "labeling/normalize_pwl.h"
+ #include "labeling/trace.h"
+ 
+ using namespace std;
+@@ -66,33 +67,6 @@ static bool has_vertical(const PWLFunction& f)
+ 	return false;
+ }
+ 
+-PWLFunction normalize_pwl(const PWLFunction& f)
+-{
+-	// Fast path: boundaries already monotone (the norm) — return untouched so
+-	// well-formed instances keep bit-identical label arithmetic.
+-	bool ok = true;
+-	double hi = -INFTY;
+-	for (int k = 0; k < f.PieceCount(); ++k)
+-	{
+-		const Interval& d = f.Piece(k).domain;
+-		if (d.left < hi || d.right < d.left) { ok = false; break; }
+-		hi = d.right;
+-	}
+-	if (ok) return f;
+-	PWLFunction g;
+-	hi = -INFTY;
+-	for (int k = 0; k < f.PieceCount(); ++k)
+-	{
+-		const LinearFunction& p = f.Piece(k);
+-		double l = std::max(p.domain.left, hi);
+-		double r = p.domain.right;
+-		if (r < l) continue;
+-		g.AddPiece(LinearFunction({l, p.Value(l)}, {r, p.Value(r)}));
+-		hi = r;
+-	}
+-	return g;
+-}
+-
+ // Definition of Alpha from Section 5.2.
+ double alpha(Label* l, bool partial)
+ {
+@@ -356,7 +330,7 @@ Label* MonodirectionalLabeling::ExtensionStep(const LazyLabel& ll) const
+ 	else
+ 		lv->duration = (l->duration + vrp_.tau[u][v]).Compose(vrp_.dep[u][v]);
+ 	if (limited_extension && !cross) lv->duration.RestrictDomain({0.0, t_m});
+-	lv->duration = normalize_pwl(lv->duration); // kayros (M5.7): heal epsilon-dust piece misorder.
++	normalize_pwl(lv->duration); // kayros (M5.7): heal epsilon-dust piece misorder.
+ 	if (lv->duration.Empty())
+ 	{
+ 		if (tr) fprintf(stderr, "TRC EXT-FAIL path=%s+%d reason=empty-duration\n", trace::path_str(l).c_str(), v);
+@@ -468,7 +442,8 @@ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ 			trace::path_str(l).c_str(), min(dom((PWLFunction) Delta)), max(dom((PWLFunction) Delta)),
+ 			min(img((PWLFunction) Delta)), max(img((PWLFunction) Delta)),
+ 			min(img((PWLFunction) Delta)) - l->p - l->cut_cost);
+-	l->duration = normalize_pwl((PWLFunction) Delta); // kayros (M5.7)
++	l->duration = (PWLFunction) Delta;
++	normalize_pwl(l->duration); // kayros (M5.7)
+ 	l->rw = l->duration.Domain();
+ 	l->min_cost = min(img(l->duration)) - l->p - l->cut_cost;
+ 	return false;
+@@ -494,7 +469,8 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 				if (partial)
+ 				{
+ 					Delta.DominatePieces(m->duration, theta);
+-					l->duration = normalize_pwl((PWLFunction) Delta); // kayros (M5.7)
++					l->duration = (PWLFunction) Delta;
++					normalize_pwl(l->duration); // kayros (M5.7)
+ 					l->rw = l->duration.Domain();
+ 					l->min_cost = min(img(l->duration)) - l->p - l->cut_cost;
+ 				}
+@@ -554,4 +530,4 @@ void MonodirectionalLabeling::Clean()
+ 				delete m;
+ 	U = vector<DemandLevel>(vrp_.D.NbVertices());
+ }
+-} // solver
+\ No newline at end of file
++} // solver
+diff --git a/tests/cpp/test_label_normalization.cpp b/tests/cpp/test_label_normalization.cpp
+new file mode 100644
+index 0000000..9430be1
+--- /dev/null
++++ b/tests/cpp/test_label_normalization.cpp
+@@ -0,0 +1,215 @@
++// Differential fixture against the frozen pre-optimization normalizer.
++// Link against the candidate's liblera.a with the goc and main include paths.
++#include <bit>
++#include <chrono>
++#include <cstdint>
++#include <cstdlib>
++#include <iostream>
++#include <random>
++#include <string>
++#include <vector>
++
++#include "labeling/normalize_pwl.h"
++
++using namespace goc;
++
++static PWLFunction reference_normalize(const PWLFunction& f)
++{
++    bool ok = true;
++    double hi = -INFTY;
++    for (int k = 0; k < f.PieceCount(); ++k)
++    {
++        const Interval& d = f.Piece(k).domain;
++        if (d.left < hi || d.right < d.left) { ok = false; break; }
++        hi = d.right;
++    }
++    if (ok) return f;
++    PWLFunction g;
++    hi = -INFTY;
++    for (int k = 0; k < f.PieceCount(); ++k)
++    {
++        const LinearFunction& p = f.Piece(k);
++        double l = std::max(p.domain.left, hi);
++        double r = p.domain.right;
++        if (r < l) continue;
++        g.AddPiece(LinearFunction({l, p.Value(l)}, {r, p.Value(r)}));
++        hi = r;
++    }
++    return g;
++}
++
++static void require(bool condition)
++{
++    if (!condition) { std::cerr << "normalization regression\n"; std::exit(1); }
++}
++
++static void same(double a, double b)
++{
++    require(std::bit_cast<uint64_t>(a) == std::bit_cast<uint64_t>(b));
++}
++
++static void same(Interval a, Interval b)
++{
++    same(a.left, b.left);
++    same(a.right, b.right);
++}
++
++static void check(PWLFunction input, bool expect_no_reallocation)
++{
++    const auto expected = reference_normalize(input);
++    const auto* storage = input.Pieces().data();
++    solver::normalize_pwl(input);
++    if (expect_no_reallocation) require(storage == input.Pieces().data());
++    require(input.PieceCount() == expected.PieceCount());
++    same(input.Domain(), expected.Domain());
++    same(input.Image(), expected.Image());
++    for (int i = 0; i < input.PieceCount(); ++i)
++    {
++        const auto& a = input.Piece(i);
++        const auto& b = expected.Piece(i);
++        same(a.domain, b.domain);
++        same(a.image, b.image);
++        same(a.slope, b.slope);
++        same(a.intercept, b.intercept);
++    }
++}
++
++static PWLFunction benchmark_input(int pieces, bool repair)
++{
++    PWLFunction f;
++    double y = 0.0;
++    for (int i = 0; i < pieces; ++i)
++    {
++        double left = 2.0 * i;
++        double right = left + 2.0;
++        if (repair && i == pieces / 2)
++        {
++            if (pieces == 1)
++            {
++                LinearFunction inverted({0.0, 0.0}, {1.0, 1.0});
++                inverted.domain.left = 1e-4;
++                inverted.domain.right = 0.0;
++                f.AddPiece(inverted);
++                continue;
++            }
++            left -= 1e-4;
++        }
++        // Alternate slopes so AddPiece retains the requested number of pieces.
++        const double next_y = y + (i % 2 ? 3.0 : 1.0);
++        f.AddPiece(LinearFunction({left, y}, {right, next_y}));
++        y = next_y;
++    }
++    require(f.PieceCount() == pieces);
++    return f;
++}
++
++#if defined(__GNUC__) || defined(__clang__)
++__attribute__((noinline))
++#endif
++static void benchmark_reference(PWLFunction& f)
++{
++    f = reference_normalize(f);
++}
++
++#if defined(__GNUC__) || defined(__clang__)
++__attribute__((noinline))
++#endif
++static void benchmark_candidate(PWLFunction& f)
++{
++    solver::normalize_pwl(f);
++}
++
++static uint64_t fingerprint(const std::vector<PWLFunction>& batch)
++{
++    uint64_t hash = 1469598103934665603ULL;
++    for (const auto& f : batch)
++    {
++        hash = (hash ^ f.PieceCount()) * 1099511628211ULL;
++        for (const auto& p : f.Pieces())
++            for (double value : {p.domain.left, p.domain.right, p.image.left, p.image.right, p.slope, p.intercept})
++                hash = (hash ^ std::bit_cast<uint64_t>(value)) * 1099511628211ULL;
++    }
++    return hash;
++}
++
++static void benchmark()
++{
++    constexpr int count = 8192;
++    std::mt19937_64 rng(58);
++    std::cout << "pieces,repair,rep,order,reference_ns,candidate_ns,count,fingerprint,source_capacity,reference_capacity,candidate_capacity\n";
++    for (int pieces : {1, 8, 32, 128})
++        for (bool repair : {false, true})
++        {
++            const auto source = benchmark_input(pieces, repair);
++            check(source, !repair);
++            // Construction is outside timing. Each object is normalized once.
++            // Equal batches avoid repeatedly timing an already repaired input.
++            std::vector<int> orders{0, 0, 0, 1, 1, 1};
++            std::shuffle(orders.begin(), orders.end(), rng);
++            for (int rep = -1; rep < 6; ++rep)
++            {
++                std::vector<PWLFunction> a(count, source), b(count, source);
++                double elapsed[2]{};
++                auto run = [&](int which) {
++                    auto& batch = which ? b : a;
++                    auto operation = which ? benchmark_candidate : benchmark_reference;
++                    const auto start = std::chrono::steady_clock::now();
++                    for (auto& f : batch) operation(f);
++                    elapsed[which] = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count();
++                };
++                const int order = rep < 0 ? 0 : orders[rep];
++                run(order);
++                run(1 - order);
++                const uint64_t h = fingerprint(a);
++                require(h == fingerprint(b));
++                if (rep >= 0)
++                    std::cout << pieces << ',' << repair << ',' << rep << ',' << (order ? "BA" : "AB") << ','
++                              << elapsed[0] << ',' << elapsed[1] << ',' << count << ',' << h << ','
++                              << source.Pieces().capacity() << ',' << a.front().Pieces().capacity() << ','
++                              << b.front().Pieces().capacity() << '\n';
++            }
++        }
++}
++
++int main(int argc, char** argv)
++{
++    if (argc == 2 && std::string(argv[1]) == "--benchmark") { benchmark(); return 0; }
++    int cases = 0;
++    for (bool exact : {false, true})
++    {
++        StepExactArithmeticScope scope(exact);
++        check(PWLFunction(), true);
++        check(PWLFunction::ConstantFunction(-0.0, {2.0, 2.0}), true);
++        cases += 2;
++        std::mt19937_64 rng(58);
++        for (int trial = 0; trial < 1000; ++trial)
++        {
++            PWLFunction f;
++            double x = 0.0;
++            const bool repair = trial % 2;
++            for (int k = 0; k < 12; ++k)
++            {
++                const double width = 1.0 + (rng() % 64) / 8.0;
++                const double y = static_cast<int>(rng() % 128) - 64.0;
++                const double overlap = repair && k % 3 == 1 ? 1e-4 : 0.0;
++                f.AddPiece(LinearFunction({x - overlap, y}, {x + width, y + width / 2.0}));
++                x += width;
++                if (k % 3 == 0)
++                    f.AddPiece(LinearFunction({x, y + width / 2.0}, {x, y + width + 1.0}));
++                if (k % 3 == 2)
++                    f.AddPiece(LinearFunction({x, y + width}, {x, y - 1.0}).as_choice_vertical());
++                if (k == 5)
++                {
++                    LinearFunction dust({x, y}, {x + 1.0, y + 2.0});
++                    if (repair) { dust.domain.left = x + 1e-4; dust.domain.right = x; }
++                    else x += 1.0;
++                    f.AddPiece(dust);
++                }
++                if (k == 8) x += 0.5;
++            }
++            check(std::move(f), !repair);
++            ++cases;
++        }
++    }
++    std::cout << "PASS " << cases << " normalization cases, bit-identical pieces and fast-path storage\n";
++}

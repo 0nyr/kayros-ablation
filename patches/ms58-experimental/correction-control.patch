@@ -1,0 +1,257 @@
+diff --git a/code/CMakeLists.txt b/code/CMakeLists.txt
+index ecf970a..6fd5455 100644
+--- a/code/CMakeLists.txt
++++ b/code/CMakeLists.txt
+@@ -27,4 +27,8 @@ add_executable(pricing src/main_pricing.cpp)
+ target_link_libraries(pricing networks2019)
+ 
+ add_executable(bp src/main_bp.cpp)
+-target_link_libraries(bp networks2019)
+\ No newline at end of file
++target_link_libraries(bp networks2019)
++
++# Experimental ms58 source-level diagnostic, excluded from the default build.
++add_executable(correction_invariant_witness EXCLUDE_FROM_ALL tests/correction_invariant_witness.cpp)
++target_link_libraries(correction_invariant_witness networks2019)
+diff --git a/code/include/labeling/bidirectional_labeling.h b/code/include/labeling/bidirectional_labeling.h
+index 2757f76..f1a01b5 100644
+--- a/code/include/labeling/bidirectional_labeling.h
++++ b/code/include/labeling/bidirectional_labeling.h
+@@ -45,6 +45,7 @@ public:
+ 	goc::BLBExecutionLog Run(const PricingProblem& pricing_problem, std::vector<goc::Route>* R);
+ 
+ private:
++	friend struct CorrectionInvariantWitness;
+ 	// Attempts to merge label l against all the labels in the opposite direction dominance structure.
+ 	// 	w: 	l will be merged with all labels m in L such that v(m) == v(l) and v(parent(m)) == w.
+ 	// 		if w == -1, then the check v(parent(m)) == w is ignored.
+diff --git a/code/include/labeling/monodirectional_labeling.h b/code/include/labeling/monodirectional_labeling.h
+index e8cd735..019a222 100644
+--- a/code/include/labeling/monodirectional_labeling.h
++++ b/code/include/labeling/monodirectional_labeling.h
+@@ -65,6 +65,7 @@ public:
+ 	LazyLabel Init() const;
+ 	
+ private:
++	friend struct CorrectionInvariantWitness;
+ 	// The extension step consists in taking a lazy label and building the complete label.
+ 	// Returns: the extended full label (notice that it may be infeasible, so it may be nullptr).
+ 	Label* ExtensionStep(const LazyLabel& ll) const;
+diff --git a/code/src/labeling/bidirectional_labeling.cpp b/code/src/labeling/bidirectional_labeling.cpp
+index 9ffdd86..0673296 100644
+--- a/code/src/labeling/bidirectional_labeling.cpp
++++ b/code/src/labeling/bidirectional_labeling.cpp
+@@ -77,6 +77,8 @@ BidirectionalLabeling::BidirectionalLabeling(const VRPInstance& vrp)
+ 	lbl_[0].cross = false, lbl_[1].cross = true;
+ 	partial = limited_extension = lazy_extension = unreachable_strengthened = sort_by_cost = true;
+ 	relax_elementary_check = relax_cost_check = false;
++	// Experimental ms58 diagnostic default. The historical control left this unset.
++	correcting = false;
+ }
+ 
+ BLBExecutionLog BidirectionalLabeling::Run(const PricingProblem& pricing_problem, vector<Route>* R)
+@@ -286,4 +288,4 @@ void BidirectionalLabeling::AddSolution(const goc::GraphPath& p, double min_dura
+ 	if (!includes_key(S, V)) S[V] = Route({}, 0.0, INFTY);
+ 	if (S[V].duration > min_duration) S[V] = Route(p, 0.0, min_duration);
+ }
+-} // namespace networks2019
+\ No newline at end of file
++} // namespace networks2019
+diff --git a/code/src/main_bp.cpp b/code/src/main_bp.cpp
+index 71828ae..7e09616 100644
+--- a/code/src/main_bp.cpp
++++ b/code/src/main_bp.cpp
+@@ -7,6 +7,8 @@
+ #include <iostream>
+ #include <vector>
+ #include <climits>
++#include <cstdlib>
++#include <stdexcept>
+ #include "ms56_events.h"
+ 
+ #include <goc/goc.h>
+@@ -59,6 +61,15 @@ int main(int argc, char** argv)
+ 		bool symmetric = value_or_default(experiment, "symmetric", false);
+ 		bool iterative_merge = value_or_default(experiment, "iterative_merge", true);
+ 		bool exact_labeling = value_or_default(experiment, "exact_labeling", true);
++		bool correcting = false;
++		if (const char* setting = std::getenv("KAYROS_DIAGNOSTIC_CORRECTING"))
++		{
++			const std::string value(setting);
++			if (value != "0" && value != "1")
++				throw std::invalid_argument("KAYROS_DIAGNOSTIC_CORRECTING must be 0 or 1");
++			correcting = value == "1";
++		}
++		output["ms58_diagnostic_configuration"] = {{"correcting", correcting}};
+ 
+ 
+ 		// Show experiment details.
+@@ -73,6 +84,7 @@ int main(int argc, char** argv)
+ 		clog << "Symmetric: " << symmetric << endl;
+ 		clog << "Iterative merge: " << iterative_merge << endl;
+ 		clog << "Exact labeling: " << exact_labeling << endl;
++		clog << "Explicit diagnostic correcting: " << correcting << endl;
+ 
+ 		// Preprocess instance JSON.
+ 		clog << "Preprocessing..." << endl;
+@@ -107,6 +119,7 @@ int main(int argc, char** argv)
+ 		lbl.unreachable_strengthened = unreachable_strengthened;
+ 		lbl.sort_by_cost = sort_by_cost;
+ 		lbl.symmetric = symmetric;
++		lbl.correcting = correcting;
+ 
+ 		int exact_calls=0, exact_finished=0;
+ 		int heuristic_level = 0; // 0: relax cost, 1: relax elementarity, 2: exact
+@@ -174,4 +187,4 @@ int main(int argc, char** argv)
+ 		return 3;
+ 	}
+ 	return 0;
+-}
+\ No newline at end of file
++}
+diff --git a/code/tests/correction_invariant_witness.cpp b/code/tests/correction_invariant_witness.cpp
+new file mode 100644
+index 0000000..e8546b7
+--- /dev/null
++++ b/code/tests/correction_invariant_witness.cpp
+@@ -0,0 +1,140 @@
++#include <goc/goc.h>
++#include <algorithm>
++#include <iostream>
++#include <stdexcept>
++
++#include "labeling/monodirectional_labeling.h"
++#include "labeling/bidirectional_labeling.h"
++
++using namespace goc;
++using namespace networks2019;
++
++namespace networks2019 {
++struct CorrectionInvariantWitness {
++	static int Correct(MonodirectionalLabeling& solver, Label* label) {
++		return solver.CorrectionStep(label);
++	}
++	static bool Dominated(MonodirectionalLabeling& solver, Label* label) {
++		return solver.DominationStep(label);
++	}
++	static void Clean(MonodirectionalLabeling& solver) { solver.Clean(); }
++	static bool Owns(MonodirectionalLabeling& solver, Label* label) {
++		for (const auto& vertex : solver.U)
++			for (const auto& demand : vertex)
++				if (std::find(demand.second.begin(), demand.second.end(), label) != demand.second.end()) return true;
++		return false;
++	}
++	static std::size_t MergePool(BidirectionalLabeling& solver, Label* label,
++		const MonodirectionalLabeling::DominanceStructure& pool) {
++		solver.pp_.P = std::vector<double>(5, 0.0);
++		solver.S.clear();
++		solver.IterativeMerge(label, pool);
++		return solver.S.size();
++	}
++};
++}
++
++void require(bool condition, const char* message) {
++	if (!condition) throw std::runtime_error(message);
++}
++
++VRPInstance instance() {
++	VRPInstance vrp;
++	vrp.D = Digraph(5);
++	vrp.o = 0;
++	vrp.d = 4;
++	vrp.T = 10;
++	vrp.Q = 100;
++	vrp.q = std::vector<double>(5, 0.0);
++	vrp.tw = std::vector<Interval>(5, {0.0, 10.0});
++	vrp.tau = Matrix<PWLFunction>(5, 5);
++	vrp.pretau = Matrix<PWLFunction>(5, 5);
++	vrp.arr = Matrix<PWLFunction>(5, 5);
++	vrp.dep = Matrix<PWLFunction>(5, 5);
++	vrp.LDT = Matrix<double>(5, 5);
++	vrp.tau[0][0] = PWLFunction::ConstantFunction(0.0, {0.0, 10.0});
++	return vrp;
++}
++
++void initialize(Label& label, PWLFunction duration, VertexSet unreachable) {
++	label.parent = nullptr;
++	label.v = 1;
++	label.q = 1;
++	label.p = label.cut_cost = 0;
++	label.duration = duration;
++	label.rw = duration.Domain();
++	label.min_cost = std::min(img(duration));
++	label.U = unreachable;
++}
++
++int main() {
++	MonodirectionalLabeling solver(instance());
++	solver.correcting = true;
++	VertexSet a, b;
++	a.set(1).set(2).set(4);
++	b.set(1).set(3).set(4);
++	auto* first = new Label;
++	auto* second = new Label;
++	PWLFunction rising;
++	rising.AddPiece(LinearFunction({0.0, 0.0}, {10.0, 5.0}));
++	initialize(*first, rising, a);
++	initialize(*second, PWLFunction::ConstantFunction(0.5, {0.0, 10.0}), b);
++	auto& bucket = solver.U[1].Insert(1, {});
++	bucket = {first, second};
++	Label arriving;
++	initialize(arriving, PWLFunction::ConstantFunction(0.0, {0.0, 1.0}), a);
++	require(CorrectionInvariantWitness::Correct(solver, &arriving) == 0, "Expected partial correction only");
++	require(first->min_cost > second->min_cost, "Expected stale min-cost order witness");
++	Label query;
++	initialize(query, PWLFunction::ConstantFunction(0.75, {0.0, 10.0}), b);
++	const bool stale_result = CorrectionInvariantWitness::Dominated(solver, &query);
++	std::sort(bucket.begin(), bucket.end(), [](Label* x, Label* y) { return x->min_cost < y->min_cost; });
++	initialize(query, PWLFunction::ConstantFunction(0.75, {0.0, 10.0}), b);
++	const bool sorted_result = CorrectionInvariantWitness::Dominated(solver, &query);
++	require(!stale_result && sorted_result, "Expected sorted early break to hide the valid dominator");
++	std::cout << "stale-order witness: false negative dominance, costs "
++		<< first->min_cost << ", " << second->min_cost << "\n";
++
++	// Exercise the actual iterative-merge early break with the same stale order.
++	// These are synthetic label states, not a full-instance false-closure claim.
++	Label null_forward, start, forward, null_backward, end, middle_first, middle_second;
++	null_forward.parent = null_backward.parent = nullptr;
++	start.parent = &null_forward;
++	start.v = 0;
++	start.cut_cost = 0;
++	initialize(forward, PWLFunction::ConstantFunction(0.0, {0.0, 10.0}), {});
++	forward.parent = &start;
++	forward.p = 0.75;
++	forward.min_cost = -0.75;
++	forward.S.set(0).set(1);
++	end.parent = &null_backward;
++	end.v = 4;
++	middle_first.parent = middle_second.parent = &end;
++	middle_first.v = 2;
++	middle_second.v = 3;
++	first->parent = &middle_first;
++	second->parent = &middle_second;
++	first->S = a;
++	second->S = b;
++	MonodirectionalLabeling::DominanceStructure merge_pool(5);
++	merge_pool[1].Insert(1, {}) = {first, second};
++	BidirectionalLabeling bidirectional(instance());
++	const auto stale_pool = CorrectionInvariantWitness::MergePool(bidirectional, &forward, merge_pool);
++	merge_pool[1].Insert(1, {}) = {second, first};
++	const auto sorted_pool = CorrectionInvariantWitness::MergePool(bidirectional, &forward, merge_pool);
++	require(stale_pool == 0 && sorted_pool == 1, "Expected stale merge order to suppress a negative-cost route");
++	std::cout << "merge witness: stale pool 0 routes, sorted pool 1 negative-cost route\n";
++	CorrectionInvariantWitness::Clean(solver);
++
++	auto* retired = new Label;
++	initialize(*retired, PWLFunction::ConstantFunction(1.0, {0.0, 10.0}), a);
++	solver.U[1].Insert(1, {}).push_back(retired);
++	initialize(arriving, PWLFunction::ConstantFunction(0.0, {0.0, 10.0}), a);
++	require(CorrectionInvariantWitness::Correct(solver, &arriving) == 1, "Expected full correction");
++	require(!CorrectionInvariantWitness::Owns(solver, retired), "Expected corrected-away label to leave the ownership container");
++	// CorrectionStep does not delete the pointer, since lazy children retain it.
++	// Clean deletes only U pointers, so this removed pointer requires manual cleanup.
++	delete retired;
++	CorrectionInvariantWitness::Clean(solver);
++	std::cout << "ownership witness: fully corrected label escapes Clean\n";
++}

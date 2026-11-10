@@ -1,0 +1,12 @@
+diff --git a/code/src/labeling/bidirectional_labeling.cpp b/code/src/labeling/bidirectional_labeling.cpp
+index 9ffdd86..6fae50e 100644
+--- a/code/src/labeling/bidirectional_labeling.cpp
++++ b/code/src/labeling/bidirectional_labeling.cpp
+@@ -77,6 +77,7 @@ BidirectionalLabeling::BidirectionalLabeling(const VRPInstance& vrp)
+ 	lbl_[0].cross = false, lbl_[1].cross = true;
+ 	partial = limited_extension = lazy_extension = unreachable_strengthened = sort_by_cost = true;
+ 	relax_elementary_check = relax_cost_check = false;
++	correcting = false;
+ }
+ 
+ BLBExecutionLog BidirectionalLabeling::Run(const PricingProblem& pricing_problem, vector<Route>* R)

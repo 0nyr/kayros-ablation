@@ -1,0 +1,475 @@
+diff --git a/cpp/lera/bridge/lera_bridge.cpp b/cpp/lera/bridge/lera_bridge.cpp
+index 4da9204..4926dc1 100644
+--- a/cpp/lera/bridge/lera_bridge.cpp
++++ b/cpp/lera/bridge/lera_bridge.cpp
+@@ -1,4 +1,5 @@
+ // kayros-owned bridge to the vendored Lera-Romero BPC (NOT vendored code).
++#include "goc/linear_programming/solver/ablation_settings.h"
+ #include "lera_bridge.h"
+ 
+ #include <cstdint>
+@@ -79,6 +80,7 @@ kayros::RouteEval checker_eval(const kayros::Instance& ci, const goc::GraphPath&
+ }  // namespace
+ 
+ std::string solve_duration_json(const std::string& payload, const SolveParams& params) {
++    goc::ablation_backend_settings() = nlohmann::json::object();
+     // M13.3: pin the PWL vertical arithmetic for the whole solve, from the
+     // same KAYROS_STEP_EXACT flag the Python bridge sets per instance and the
+     // labeling already reads. Step-carrying instances get the M13.0 exact
+@@ -173,6 +175,25 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+              << " columns added" << (valid_ub && added > 0 ? ", UB set" : ", no UB") << endl;
+     }
+ 
++    int exact_calls = 0, exact_finished = 0;
++    bool last_exact_finished = false, ladder_certified = false;
++    int duplicate_columns = 0;
++    auto closure_census = [&]() { return nlohmann::json{
++        {"cg_optimum", bcp.cg_optimum_count}, {"cg_certified_final_pricing", bcp.cg_certified_count},
++        {"cg_unresolved_final_pricing", bcp.cg_unresolved_count}, {"cg_infeasible_unverified", bcp.cg_infeasible_count},
++        {"strong_rmp_infeasible_unverified", bcp.strong_rmp_infeasible_count},
++        {"selected_rmp_infeasible_unverified", bcp.selected_rmp_infeasible_count},
++        {"unbranched_fractional_unverified", bcp.unbranched_fractional_count}, {"duplicate_columns", duplicate_columns}}; };
++    nlohmann::json bound_events = nlohmann::json::array();
++    bcp.on_bound = [&](Duration elapsed, double bound, const std::string& source) {
++        nlohmann::json entry = {{"event", source == "search_closed" ? "search_closed" : (source == "search_terminated" ? "search_terminated" : "global_bound")},
++            {"time", elapsed.Amount(DurationUnit::Seconds)}, {"source", source},
++            {"global_lb", bound > -INFTY && bound < INFTY ? nlohmann::json(bound) : nlohmann::json(nullptr)},
++            {"exact_pricing", {{"calls", exact_calls}, {"finished", exact_finished}}}};
++        entry["closure_census"] = closure_census();
++        if (params.on_event) params.on_event(entry.dump());
++        bound_events.push_back(std::move(entry));
++    };
+     nlohmann::json incumbents = nlohmann::json::array();
+     bcp.on_incumbent = [&](Duration elapsed, const VRPSolution& sol, const std::string& origin) {
+         nlohmann::json entry = {
+@@ -201,7 +222,10 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+         // (M5.2) Residual budget from the BCP's single absolute deadline,
+         // not from a per-call stopwatch chain.
+         lbl.time_limit = bcp.deadline.Remaining();
++        if (heuristic_level == levels.size() - 1) ++exact_calls;
+         auto lbl_log = lbl.Run(pp, &R, levels[heuristic_level]);
++        last_exact_finished = heuristic_level == levels.size() - 1 && lbl_log.status == BLBStatus::Finished;
++        if (last_exact_finished) ++exact_finished;
+ 
+         // Add iteration log.
+         cg_execution_log->iterations->push_back(lbl_log);
+@@ -240,7 +264,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+             // skipped rather than certified — the loud-fail below is for real
+             // routes the checker rejects.
+             if (r.path.size() < 3) continue;
+-            if (!column_keys.insert(path_key(r.path)).second) continue;
++            if (!column_keys.insert(path_key(r.path)).second) { ++duplicate_columns; continue; }
+             auto ev = checker_eval(checker_inst, r.path);
+             if (!ev.feasible)
+             {
+@@ -279,6 +303,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     // some level contributes new columns or the Exact level finishes empty.
+     auto run_ladder_and_add = [&](const PricingProblem& pp, CGExecutionLog* lg) {
+         int added = 0;
++        ladder_certified = false;
+         while (!bcp.deadline.Reached()) {
+             if (MemoryMonitor::Exceeded()) break; // kayros (M13.2): don't climb levels on a doomed run
+             added = add_columns(run_one_level(pp, lg));
+@@ -288,6 +313,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+                 // (If it still REPORTED a negative-reduced-cost duplicate, the
+                 // discrepancy is labeling-vs-checker dust within the documented
+                 // certificate tolerance; the Exact level did run.)
++                ladder_certified = last_exact_finished && !bcp.deadline.Reached() && !MemoryMonitor::Exceeded();
+                 heuristic_level = 0;
+                 lbl.closing_state = false;
+                 lbl.merge_start = 0;
+@@ -314,6 +340,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     const double alpha = params.stab_alpha;
+     bcp.pricing_solver = [&](const PricingProblem& pricing_problem, int /*node_number*/,
+                              Duration /*tlimit*/, CGExecutionLog* cg_execution_log) {
++        bool certified_true_duals = false;
+         if (alpha > 0.0 && center_set) {
+             PricingProblem pps = pricing_problem;  // A and S are structural.
+             for (size_t i = 0; i < pps.P.size(); ++i)
+@@ -325,6 +352,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+             if (added == 0 && !bcp.deadline.Reached()) {
+                 ++misprice_count;
+                 run_ladder_and_add(pricing_problem, cg_execution_log);
++                certified_true_duals = ladder_certified;
+                 center_P = pricing_problem.P;
+                 center_sigma = pricing_problem.sigma;
+             } else {
+@@ -334,6 +362,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+             }
+         } else {
+             run_ladder_and_add(pricing_problem, cg_execution_log);
++            certified_true_duals = ladder_certified;
+             if (!center_set) {
+                 center_P = pricing_problem.P;
+                 center_sigma = pricing_problem.sigma;
+@@ -351,13 +380,21 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+         // BCStatus::MemoryLimitReached (the existing CG->BC branch).
+         if (MemoryMonitor::Exceeded())
+             cg_execution_log->status = CGStatus::MemoryLimitReached;
++        if (cg_execution_log->iterations.IsSet() && !cg_execution_log->iterations->empty())
++            cg_execution_log->iterations->back()["ablation_final_pricing_certified"] =
++                certified_true_duals && !bcp.deadline.Reached() && !MemoryMonitor::Exceeded();
+     };
+ 
+     VRPSolution solution(INFTY, {});
+     auto log = bcp.Run(&solution);
+ 
+     nlohmann::json result;
++    result["effective_backend_settings"] = goc::ablation_backend_settings();
++    result["effective_algorithm_settings"] = {{"cut_limit", params.cut_limit}, {"cut_violation_threshold", 0.1}, {"algorithm_epsilon", 1e-6}, {"solution_limit", params.solution_limit}, {"node_limit", params.node_limit}, {"stab_alpha", params.stab_alpha}, {"ng_routes", false}};
+     result["exact_log"] = log;
++    result["bound_events"] = bound_events;
++    result["closure_census"] = closure_census();
++    result["exact_pricing"] = {{"calls", exact_calls}, {"finished", exact_finished}};
+     result["checker_infeasible_columns"] = checker_infeasible_count;
+     // kayros (M13.2): guard observability, never used in control flow.
+     result["memory"] = {
+diff --git a/cpp/lera/bridge/lera_bridge.h b/cpp/lera/bridge/lera_bridge.h
+index e1ea944..479fd3e 100644
+--- a/cpp/lera/bridge/lera_bridge.h
++++ b/cpp/lera/bridge/lera_bridge.h
+@@ -41,6 +41,7 @@ struct SolveParams {
+     // routes}); the same records are also collected in the result's
+     // "incumbents" array. Keep it cheap — the solve blocks on it.
+     std::function<void(const std::string& incumbent_json)> on_incumbent;
++    std::function<void(const std::string&)> on_event;
+ };
+ 
+ // payload: normalized Lera instance JSON (built by the kayros.lera Python
+diff --git a/cpp/lera/bridge/lera_module.cpp b/cpp/lera/bridge/lera_module.cpp
+index 7ad1a89..204ec1a 100644
+--- a/cpp/lera/bridge/lera_module.cpp
++++ b/cpp/lera/bridge/lera_module.cpp
+@@ -30,7 +30,7 @@ PYBIND11_MODULE(_lera, m) {
+         [](const std::string& payload, double time_limit_s, int cut_limit, int node_limit,
+            int solution_limit, py::object on_incumbent,
+            std::vector<std::vector<int>> initial_routes, double stab_alpha,
+-           double memory_limit_mb) {
++           double memory_limit_mb, py::object on_event) {
+             kayros::lera::SolveParams params;
+             params.time_limit_s = time_limit_s;
+             params.cut_limit = cut_limit;
+@@ -47,6 +47,12 @@ PYBIND11_MODULE(_lera, m) {
+                     on_incumbent(incumbent_json);
+                 };
+             }
++            if (!on_event.is_none()) {
++                params.on_event = [on_event](const std::string& event_json) {
++                    py::gil_scoped_acquire gil;
++                    on_event(event_json);
++                };
++            }
+             py::gil_scoped_release release;
+             return kayros::lera::solve_duration_json(payload, params);
+         },
+@@ -54,7 +60,7 @@ PYBIND11_MODULE(_lera, m) {
+         py::arg("node_limit") = INT_MAX, py::arg("solution_limit") = 3000,
+         py::arg("on_incumbent") = py::none(),
+         py::arg("initial_routes") = std::vector<std::vector<int>>{},
+-        py::arg("stab_alpha") = 0.0, py::arg("memory_limit_mb") = 0.0);
++        py::arg("stab_alpha") = 0.0, py::arg("memory_limit_mb") = 0.0, py::arg("on_event") = py::none());
+ 
+     // --- nyr NDCPWLF test surface (M5.9 exact stepwise labeling) -----------
+     // Direct pytest access to the step-capable PWL primitives while they are
+diff --git a/cpp/lera/goc/include/goc/linear_programming/solver/ablation_settings.h b/cpp/lera/goc/include/goc/linear_programming/solver/ablation_settings.h
+new file mode 100644
+index 0000000..6626152
+--- /dev/null
++++ b/cpp/lera/goc/include/goc/linear_programming/solver/ablation_settings.h
+@@ -0,0 +1,8 @@
++#pragma once
++#include "goc/lib/json.hpp"
++namespace goc {
++inline nlohmann::json& ablation_backend_settings() {
++    static nlohmann::json settings = nlohmann::json::object();
++    return settings;
++}
++}
+diff --git a/cpp/lera/goc/src/linear_programming/cplex/cplex_solver.cpp b/cpp/lera/goc/src/linear_programming/cplex/cplex_solver.cpp
+index e296d89..dfaed5e 100644
+--- a/cpp/lera/goc/src/linear_programming/cplex/cplex_solver.cpp
++++ b/cpp/lera/goc/src/linear_programming/cplex/cplex_solver.cpp
+@@ -5,6 +5,7 @@
+ //
+ 
+ #include <mutex>
++#include "goc/linear_programming/solver/ablation_settings.h"
+ 
+ #include "goc/collection/collection_utils.h"
+ #include "goc/string/string_utils.h"
+@@ -59,6 +60,11 @@ void apply_configuration(CplexFormulation* formulation, const json& config)
+ {
+ 	// Reset parameters of the formulation to the default values.
+ 	cplex::setdefaults(formulation->Environment());
++	cplex::setintparam(formulation->Environment(), CPX_PARAM_THREADS, 1);
++    cplex::setdblparam(formulation->Environment(), CPX_PARAM_EPRHS, 1e-7);
++    cplex::setdblparam(formulation->Environment(), CPX_PARAM_EPOPT, 1e-7);
++    cplex::setdblparam(formulation->Environment(), CPX_PARAM_EPINT, 1e-6);
++    cplex::setdblparam(formulation->Environment(), CPX_PARAM_EPGAP, 0.0);
+ 	
+ 	// Add new parameters.
+ 	for (auto it_param = config.begin(); it_param != config.end(); ++it_param)
+@@ -80,6 +86,25 @@ void apply_configuration(CplexFormulation* formulation, const json& config)
+ 	}
+ }
+ 
++void record_ablation_settings(CplexFormulation* formulation, const string& phase)
++{
++    auto env = formulation->Environment();
++    json record = {{"backend", "CPLEX"}, {"version", CPXversion(env)}};
++    for (auto item : vector<pair<string,int>>{{"threads", CPX_PARAM_THREADS}, {"lp_method", CPX_PARAM_LPMETHOD},
++            {"presolve", CPX_PARAM_PREIND}, {"reduction", CPX_PARAM_REDUCE}, {"scaling", CPX_PARAM_SCAIND},
++            {"parallel", CPX_PARAM_PARALLELMODE}, {"random_seed", CPX_PARAM_RANDOMSEED}}) {
++        CPXINT value; cplex::getintparam(env, item.second, &value); record[item.first] = value;
++    }
++    for (auto item : vector<pair<string,int>>{{"primal_feasibility_tolerance", CPX_PARAM_EPRHS},
++            {"dual_feasibility_tolerance", CPX_PARAM_EPOPT}, {"integrality_tolerance", CPX_PARAM_EPINT},
++            {"mip_relative_gap", CPX_PARAM_EPGAP}}) {
++        double value; cplex::getdblparam(env, item.second, &value); record[item.first] = value;
++    }
++    auto& all = ablation_backend_settings();
++    int count = all.find(phase) != all.end() ? all[phase].value("calls", 0) : 0;
++    record["calls"] = count+1; all[phase] = record;
++}
++
+ // Adds the initial solutions provided to the formulation as MIPstarts.
+ void add_initial_solutions(CplexFormulation* formulation, const vector<Valuation>& initial_solutions)
+ {
+@@ -464,6 +489,7 @@ LPExecutionLog solve_lp(CplexFormulation* formulation, ostream* screen_output, D
+ 	
+ 	// Optimize.
+ 	Stopwatch rolex(true);
++	record_ablation_settings(formulation, "lp");
+ 	cplex::lpopt(formulation->Environment(), formulation->Problem());
+ 	rolex.Pause();
+ 	
+@@ -531,6 +557,7 @@ BCExecutionLog solve_bc(CplexFormulation* formulation, ostream* screen_output, D
+ 	
+ 	// Optimize.
+ 	Stopwatch rolex(true);
++	record_ablation_settings(formulation, "mip");
+ 	cplex::mipopt(formulation->Environment(), formulation->Problem());
+ 	rolex.Pause();
+ 	
+diff --git a/cpp/lera/goc/src/linear_programming/highs/highs_solver.cpp b/cpp/lera/goc/src/linear_programming/highs/highs_solver.cpp
+index dc7b08f..e646270 100644
+--- a/cpp/lera/goc/src/linear_programming/highs/highs_solver.cpp
++++ b/cpp/lera/goc/src/linear_programming/highs/highs_solver.cpp
+@@ -4,6 +4,8 @@
+ 
+ #include "goc/linear_programming/highs/highs_solver.h"
+ 
++// ablation backend settings
++#include "goc/linear_programming/solver/ablation_settings.h"
+ #include <map>
+ 
+ #include "Highs.h"
+@@ -94,10 +96,14 @@ HighsModel materialize(MatrixFormulation* formulation, bool relax)
+ 
+ // Configures a Highs instance: silent by default, single-threaded (kayros
+ // one-run-one-thread convention), time limit, then user config overrides.
+-void configure(Highs& solver, ostream* screen_output, Duration time_limit, const json& config)
++void configure(Highs& solver, ostream* screen_output, Duration time_limit, const json& config, const string& phase)
+ {
+ 	solver.setOptionValue("output_flag", screen_output != nullptr);
+-	solver.setOptionValue("threads", 1);
++    solver.setOptionValue("threads", 1);
++    solver.setOptionValue("primal_feasibility_tolerance", 1e-7);
++    solver.setOptionValue("dual_feasibility_tolerance", 1e-7);
++    solver.setOptionValue("mip_feasibility_tolerance", 1e-6);
++    solver.setOptionValue("mip_rel_gap", 0.0);
+ 	solver.setOptionValue("time_limit", max(0.0, time_limit.Amount(DurationUnit::Seconds)));
+ 	for (auto it = config.begin(); it != config.end(); ++it)
+ 	{
+@@ -105,7 +111,23 @@ void configure(Highs& solver, ostream* screen_output, Duration time_limit, const
+ 		else if (it.value().is_number()) solver.setOptionValue(it.key(), (double)it.value());
+ 		else if (it.value().is_boolean()) solver.setOptionValue(it.key(), (bool)it.value());
+ 		else solver.setOptionValue(it.key(), (string)it.value());
+-	}
++    }
++    json record = {{"backend", "HiGHS"}, {"version", solver.version()}};
++    for (const string key : {"threads", "random_seed", "simplex_strategy"}) {
++        HighsInt value; if (solver.getOptionValue(key, value) != HighsStatus::kOk) fail("Cannot read HiGHS option " + key);
++        record[key] = value;
++    }
++    for (const string key : {"primal_feasibility_tolerance", "dual_feasibility_tolerance", "mip_feasibility_tolerance", "mip_rel_gap"}) {
++        double value; if (solver.getOptionValue(key, value) != HighsStatus::kOk) fail("Cannot read HiGHS option " + key);
++        record[key] = value;
++    }
++    for (const string key : {"presolve", "solver", "parallel"}) {
++        string value; if (solver.getOptionValue(key, value) != HighsStatus::kOk) fail("Cannot read HiGHS option " + key);
++        record[key] = value;
++    }
++    auto& all = ablation_backend_settings();
++    int count = all.find(phase) != all.end() ? all[phase].value("calls", 0) : 0;
++    record["calls"] = count+1; all[phase] = record;
+ }
+ 
+ Valuation values_to_valuation(MatrixFormulation* formulation, const vector<double>& values)
+@@ -214,7 +236,7 @@ LPExecutionLog solve_lp(MatrixFormulation* formulation, ostream* screen_output,
+ 		formulation->lp_session = session;
+ 	}
+ 	Highs& solver = session->solver;
+-	configure(solver, screen_output, time_limit, config);
++	configure(solver, screen_output, time_limit, config, "lp");
+ 	sync_session(session.get(), formulation);
+ 
+ 	Stopwatch rolex(true);
+@@ -263,7 +285,7 @@ BCExecutionLog solve_bc(MatrixFormulation* formulation, ostream* screen_output,
+ 	BCExecutionLog execution_log;
+ 
+ 	Highs solver;
+-	configure(solver, screen_output, time_limit, config);
++	configure(solver, screen_output, time_limit, config, "mip");
+ 	solver.passModel(materialize(formulation, /*relax=*/false));
+ 
+ 	Stopwatch rolex(true);
+diff --git a/cpp/lera/main/include/bcp/bcp.h b/cpp/lera/main/include/bcp/bcp.h
+index 2dd8182..01eadbe 100644
+--- a/cpp/lera/main/include/bcp/bcp.h
++++ b/cpp/lera/main/include/bcp/bcp.h
+@@ -26,6 +26,8 @@ typedef std::function<void(goc::Duration elapsed, const goc::VRPSolution& incumb
+ class BCP
+ {
+ public:
++	int cg_optimum_count = 0, cg_certified_count = 0, cg_unresolved_count = 0;
++    int cg_infeasible_count = 0, strong_rmp_infeasible_count = 0, unbranched_fractional_count = 0, selected_rmp_infeasible_count = 0;
+ 	goc::Duration time_limit;
+ 	// (M5.2) Absolute deadline derived from time_limit at Run(). All internal
+ 	// components and the external pricing_solver take their residual budgets
+@@ -34,6 +36,7 @@ public:
+ 	int node_limit;
+ 	int cut_limit;
+ 	BCPPricingFunction pricing_solver;
++	std::function<void(goc::Duration, double, const std::string&)> on_bound;
+ 	BCPIncumbentCallback on_incumbent; // optional; called on every new UB.
+ 
+ 	// Initializes the Branch cut and price solver.
+@@ -61,6 +64,7 @@ private:
+ 		int index;
+ 		double bound;
+ 		std::vector<goc::Arc> A; // forbidden arcs.
++		bool rmp_infeasible = false;
+ 		goc::Valuation opt; // relaxation optimum.
+ 		
+ 		struct Comparator { inline bool operator() (Node* n1, Node* n2) { return n1->bound > n2->bound; } };
+diff --git a/cpp/lera/main/src/bcp/bcp.cpp b/cpp/lera/main/src/bcp/bcp.cpp
+index d9c59b3..ae9e67b 100644
+--- a/cpp/lera/main/src/bcp/bcp.cpp
++++ b/cpp/lera/main/src/bcp/bcp.cpp
+@@ -94,6 +94,10 @@ BCPExecutionLog BCP::Run(goc::VRPSolution* solution)
+ 	Node* root = new Node{0, INFTY, {}};
+ 	ProcessNode(root);
+ 	log.root_time = rolex.Peek();
++	if (log.root_lp_value.IsSet()) {
++		z_lb = *log.root_lp_value;
++		if (on_bound) on_bound(rolex.Peek(), z_lb, "root_complete");
++	}
+ 
+ 	if (!q.empty())
+ 	{
+@@ -127,6 +131,10 @@ BCPExecutionLog BCP::Run(goc::VRPSolution* solution)
+ 				// Output to console.
+ 				if (tstream.RegisterAttempt()) tstream.WriteRow({STR(rolex.Peek()), STR(log.nodes_closed), STR(log.nodes_open), STR(z_lb), STR(z_ub), STR(spf->formulation->VariableCount())});
+ 			}
++			if (log.status == BCStatus::DidNotStart && !q.empty()) {
++				z_lb = std::max(z_lb, std::min(z_ub, q.top()->bound));
++				if (on_bound) on_bound(rolex.Peek(), z_lb, "frontier");
++			}
+ 			delete bbnode;
+ 		}
+ 		// (M5.2) Only close the gap when the tree was fully explored: a branch
+@@ -140,7 +148,10 @@ BCPExecutionLog BCP::Run(goc::VRPSolution* solution)
+ 		// open node's bound (q is best-bound-first), not the last popped one —
+ 		// report it so the final incumbent's true gap is known. If the TL hit
+ 		// during root CG there is no valid LB and best_bound stays unset.
+-		if (!q.empty()) z_lb = std::max(z_lb, q.top()->bound);
++		// An interrupted active branch can have children absent from q.
++		// Retain its inherited bound rather than advancing to the queue alone.
++		if (!q.empty() && log.status == BCStatus::DidNotStart)
++			z_lb = std::max(z_lb, std::min(z_ub, q.top()->bound));
+ 
+ 		// Delete nodes that were not processed.
+ 		while (!q.empty()) { delete q.top(); q.pop(); }
+@@ -153,6 +164,8 @@ BCPExecutionLog BCP::Run(goc::VRPSolution* solution)
+ 		z_lb = z_ub;
+ 	}
+ 	log.time = rolex.Peek();
++	if (on_bound) on_bound(log.time, z_lb,
++		log.status == BCStatus::Optimum && z_ub < INFTY ? "search_closed" : "search_terminated");
+ 	
+ 	// Set bounds and solutions found.
+ 	if (z_ub != INFTY) log.best_int_value = z_ub;
+@@ -179,6 +192,8 @@ double BCP::EstimateBound(Node* node)
+ 	auto lp_log = lp_solver.Solve(spf->formulation);
+ 	// (M5.2) An aborted probe must poison the run status: dropping both
+ 	// children of a node silently would let Run() claim optimality later.
++	node->rmp_infeasible = lp_log.status == LPStatus::Infeasible;
++    if (node->rmp_infeasible) ++strong_rmp_infeasible_count;
+ 	if (lp_log.status == LPStatus::TimeLimitReached) log.status = BCStatus::TimeLimitReached;
+ 	if (lp_log.status == LPStatus::MemoryLimitReached) log.status = BCStatus::MemoryLimitReached; // kayros (M13.2)
+ 	return lp_log.status == LPStatus::Optimum ? *lp_log.incumbent_value : INFTY;
+@@ -198,6 +213,10 @@ void BCP::ProcessNode(Node* node)
+ 	// Update node.
+ 	if (cg_log.status == CGStatus::Optimum)
+ 	{
++        ++cg_optimum_count;
++        bool certified = cg_log.iterations.IsSet() && !cg_log.iterations->empty()
++            && cg_log.iterations->back().value("ablation_final_pricing_certified", false);
++        if (certified) ++cg_certified_count; else ++cg_unresolved_count;
+ 		node->bound = cg_log.incumbent_value;
+ 		node->opt = *cg_log.incumbent;
+ 	}
+@@ -228,6 +247,7 @@ void BCP::ProcessNode(Node* node)
+ 	}
+ 	else if (cg_log.status == CGStatus::Infeasible)
+ 	{
++        ++cg_infeasible_count;
+ 		log.nodes_closed++;
+ 		delete node;
+ 	}
+@@ -285,6 +305,8 @@ void BCP::BranchNode(Node* node)
+ 	
+ 	// Calculate all candidate estimate bounds and keep the best one.
+ 	vector<Node> best_candidate;
++    int selected_infeasible = 0;
++    if (x_most.empty()) ++unbranched_fractional_count;
+ 	if (!x_most.empty())
+ 	{
+ 		double best_estimate = -INFTY;
+@@ -311,12 +333,14 @@ void BCP::BranchNode(Node* node)
+ 			{
+ 				best_estimate = min(left.bound, right.bound);
+ 				best_candidate = {};
++                selected_infeasible = int(left.rmp_infeasible) + int(right.rmp_infeasible);
+ 				if (left.bound < INFTY) best_candidate.push_back(left);
+ 				if (right.bound < INFTY) best_candidate.push_back(right);
+ 			}
+ 		}
+ 	}
+ 	
++    if (log.status == BCStatus::DidNotStart) selected_rmp_infeasible_count += selected_infeasible;
+ 	*log.branching_time += rolex_branch.Pause();
+ 	// Process new children to the queue.
+ 	for (Node& candidate: best_candidate)
+diff --git a/src/kayros/lera/__init__.py b/src/kayros/lera/__init__.py
+index 1e18c7d..edcef75 100644
+--- a/src/kayros/lera/__init__.py
++++ b/src/kayros/lera/__init__.py
+@@ -220,6 +220,7 @@ def solve_duration(
+     node_limit: int | None = None,
+     solution_limit: int = 3000,
+     on_incumbent: Callable[[dict[str, Any]], None] | None = None,
++    on_event: Callable[[dict[str, Any]], None] | None = None,
+     initial_routes: list[list[int]] | None = None,
+     stab_alpha: float = 0.0,
+     memory_limit_mb: float | None = None,
+@@ -315,6 +316,8 @@ def solve_duration(
+             on_incumbent(json.loads(incumbent_json))
+ 
+         kwargs["on_incumbent"] = _hook
++    if on_event is not None:
++        kwargs["on_event"] = lambda payload: on_event(json.loads(payload))
+     if initial_routes is not None:
+         kwargs["initial_routes"] = [[int(c) for c in route] for route in initial_routes]
+     result = json.loads(_lera.solve_duration_json(json.dumps(payload), **kwargs))

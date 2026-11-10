@@ -1,0 +1,333 @@
+diff --git a/cpp/lera/bridge/lera_bridge.cpp b/cpp/lera/bridge/lera_bridge.cpp
+index 4926dc1..3a989dd 100644
+--- a/cpp/lera/bridge/lera_bridge.cpp
++++ b/cpp/lera/bridge/lera_bridge.cpp
+@@ -1,6 +1,7 @@
+ // kayros-owned bridge to the vendored Lera-Romero BPC (NOT vendored code).
+ #include "goc/linear_programming/solver/ablation_settings.h"
+ #include "lera_bridge.h"
++#include "pricing_trace.h"
+ 
+ #include <cstdint>
+ #include <cstdlib>
+@@ -80,6 +81,8 @@ kayros::RouteEval checker_eval(const kayros::Instance& ci, const goc::GraphPath&
+ }  // namespace
+ 
+ std::string solve_duration_json(const std::string& payload, const SolveParams& params) {
++    PricingTrace pricing_trace;
++    FirstPricingReplay first_replay(static_cast<bool>(pricing_trace));
+     goc::ablation_backend_settings() = nlohmann::json::object();
+     // M13.3: pin the PWL vertical arithmetic for the whole solve, from the
+     // same KAYROS_STEP_EXACT flag the Python bridge sets per instance and the
+@@ -107,6 +110,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     preprocess_triangle_depot(inst);
+ 
+     nyr::VRPInstance vrp = inst.get<nyr::VRPInstance>();
++    if (first_replay) pricing_trace.emit(replay_instance(vrp));
+ 
+     // Create SPF and add initial routes (o, i, d) with checker-exact costs
+     // (M5.6 stage A: every master objective coefficient is the checker value
+@@ -125,6 +129,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     };
+ 
+     SPF spf(vrp.D.NbVertices());
++    nlohmann::json trace_initial;
+     for (Vertex i : exclude(vrp.D.Vertices(), {vrp.o, vrp.d})) {
+         const GraphPath seed_path{vrp.o, i, vrp.d};
+         auto r = vrp.BestDurationRoute(seed_path);
+@@ -132,7 +137,12 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+         column_keys.insert(path_key(seed_path));
+         spf.AddRoute(ev.feasible ? Route(seed_path, ev.departure, ev.duration)
+                                  : Route(r.path, r.t0, r.value));
++        if (pricing_trace) trace_initial.push_back({{"path", seed_path},
++            {"native_cost", r.value}, {"master_cost", ev.feasible ? ev.duration : r.value},
++            {"checker_feasible", ev.feasible}});
+     }
++    if (pricing_trace) pricing_trace.emit({{"event", "initial_master"},
++        {"columns", trace_initial}, {"warm_start_routes", params.initial_routes.size()}});
+ 
+     BCP bcp(vrp.D, &spf);
+     bcp.time_limit = Duration(params.time_limit_s, DurationUnit::Seconds);
+@@ -212,18 +222,75 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     BidirectionalLabeling lbl(vrp, ng_params);
+     lbl.solution_limit = params.solution_limit;
+     lbl.closing_state = false;
++    if (first_replay) lbl.correcting = false;
+ 
+     const vector<LabelingLevel> levels = {
+         LabelingLevel::HeuristicCost, LabelingLevel::HeuristicElementarity, LabelingLevel::Exact};
+     const vector<string> level_names = {"Heuristic Cost", "Heuristic Elementarity", "Exact"};
+     size_t heuristic_level = 0;
+-    auto run_one_level = [&](const PricingProblem& pp, CGExecutionLog* cg_execution_log) {
++    uint64_t trace_call = 0;
++    auto run_one_level = [&](const PricingProblem& original_pp, CGExecutionLog* cg_execution_log) {
++        PricingProblem replay_pp;
++        if (first_replay) {
++            replay_pp = original_pp;
++            first_replay.apply(nlohmann::json(original_pp), replay_pp.P);
++        }
++        const PricingProblem& pp = first_replay ? replay_pp : original_pp;
+         vector<Route> R;
+         // (M5.2) Residual budget from the BCP's single absolute deadline,
+         // not from a per-call stopwatch chain.
+         lbl.time_limit = bcp.deadline.Remaining();
+         if (heuristic_level == levels.size() - 1) ++exact_calls;
++        double trace_started = 0.0;
++        if (pricing_trace) {
++            ++trace_call;
++            const nlohmann::json context = pp;
++            const std::string encoded = context.dump();
++            nlohmann::json begin = {{"event", "pricing_begin"}, {"call", trace_call},
++                {"level", level_names[heuristic_level]}, {"master_paths", column_keys.size()},
++                {"remaining_s", lbl.time_limit.Amount(DurationUnit::Seconds)},
++                {"closing_state", lbl.closing_state}, {"merge_start", lbl.merge_start},
++                {"context_fnv1a64", PricingTrace::fingerprint(encoded)},
++                {"context_bytes", encoded.size()}, {"profits_count", pp.P.size()},
++                {"cut_count", pp.S.size()}, {"forbidden_arc_count", pp.A.size()}};
++            if (encoded.size() <= 65536) begin["context"] = context;
++            if (first_replay) {
++                begin["replay"] = true;
++                begin["original_context"] = original_pp;
++                begin["correcting"] = false;
++            }
++            pricing_trace.emit(std::move(begin));
++            trace_started = PricingTrace::monotonic_seconds();
++        }
+         auto lbl_log = lbl.Run(pp, &R, levels[heuristic_level]);
++        if (pricing_trace) {
++            const double elapsed = PricingTrace::monotonic_seconds() - trace_started;
++            nlohmann::json details = lbl_log;
++            details.erase("screen_output");
++            for (const char* direction : {"forward", "backward"})
++                if (details.count(direction)) details[direction].erase("screen_output");
++            uint64_t routes_hash = UINT64_C(14695981039346656037);
++            nlohmann::json samples = nlohmann::json::array();
++            nlohmann::json first_routes = nlohmann::json::array();
++            for (const auto& route : R) {
++                const nlohmann::json record = {{"path", route.path}, {"cost", route.duration}};
++                routes_hash ^= PricingTrace::fingerprint(record.dump());
++                routes_hash *= UINT64_C(1099511628211);
++                if (samples.size() < 3) samples.push_back(record);
++                if (trace_call == 1 && first_routes.size() < 3000) first_routes.push_back(record);
++            }
++            nlohmann::json end = {{"event", "pricing_end"}, {"call", trace_call},
++                {"level", level_names[heuristic_level]}, {"wall_s", elapsed},
++                {"search_finished", lbl_log.status == BLBStatus::Finished},
++                {"route_count", R.size()}, {"ordered_routes_fnv1a64", routes_hash},
++                {"route_samples", samples}, {"labeling", details}};
++            if (trace_call == 1) {
++                end["first_call_routes"] = first_routes;
++                end["first_call_routes_truncated"] = first_routes.size() != R.size();
++            }
++            pricing_trace.emit(std::move(end));
++        }
++        if (first_replay) first_replay.finish(pricing_trace);
+         last_exact_finished = heuristic_level == levels.size() - 1 && lbl_log.status == BLBStatus::Finished;
+         if (last_exact_finished) ++exact_finished;
+ 
+@@ -254,6 +321,11 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     // formulation inserts, the dominant non-interruptible tail otherwise.
+     auto add_columns = [&](const vector<Route>& R) {
+         int added = 0;
++        const double trace_admission_started = pricing_trace ? PricingTrace::monotonic_seconds() : 0.0;
++        const int trace_duplicates_before = duplicate_columns;
++        const int trace_infeasible_before = checker_infeasible_count;
++        uint64_t trace_admitted_hash = UINT64_C(14695981039346656037);
++        double trace_max_cost_delta = 0.0;
+         for (const auto& r : R) {
+             if (bcp.deadline.Reached()) break;
+             if (MemoryMonitor::Exceeded()) break; // kayros (M13.2)
+@@ -288,7 +360,19 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+             }
+             spf.AddRoute(Route(r.path, ev.departure, ev.duration));
+             ++added;
++            if (pricing_trace) {
++                const nlohmann::json record = {{"path", r.path}, {"cost", ev.duration}};
++                trace_admitted_hash ^= PricingTrace::fingerprint(record.dump());
++                trace_admitted_hash *= UINT64_C(1099511628211);
++                trace_max_cost_delta = std::max(trace_max_cost_delta, std::abs(ev.duration - r.duration));
++            }
+         }
++        if (pricing_trace) pricing_trace.emit({{"event", "column_admission"}, {"call", trace_call},
++            {"wall_s", PricingTrace::monotonic_seconds() - trace_admission_started},
++            {"added", added}, {"duplicates", duplicate_columns - trace_duplicates_before},
++            {"checker_infeasible", checker_infeasible_count - trace_infeasible_before},
++            {"ordered_admitted_fnv1a64", trace_admitted_hash},
++            {"max_abs_repricing_delta", trace_max_cost_delta}, {"master_paths", column_keys.size()}});
+         return added;
+     };
+ 
+diff --git a/cpp/lera/bridge/pricing_trace.h b/cpp/lera/bridge/pricing_trace.h
+new file mode 100644
+index 0000000..3804c79
+--- /dev/null
++++ b/cpp/lera/bridge/pricing_trace.h
+@@ -0,0 +1,132 @@
++#pragma once
++
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <cstdint>
++#include <cmath>
++#include <fstream>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++#include "goc/lib/json.hpp"
++
++namespace kayros::lera {
++
++// Opt-in development trace. Every complete JSONL record is flushed before
++// returning to the solver. An unmatched begin record carries no completion
++// claim, and a killed write can leave one incomplete final line.
++class PricingTrace {
++public:
++    PricingTrace() {
++        const char* path = std::getenv("KAYROS_PRICING_TRACE");
++        if (path && *path) {
++            file_ = std::fopen(path, "wx");
++            if (!file_) throw std::runtime_error("Cannot exclusively create KAYROS_PRICING_TRACE");
++        }
++    }
++    ~PricingTrace() { if (file_) std::fclose(file_); }
++    PricingTrace(const PricingTrace&) = delete;
++    PricingTrace& operator=(const PricingTrace&) = delete;
++    explicit operator bool() const { return file_ != nullptr; }
++
++    // FNV-1a over JSON bytes is a diagnostic fingerprint, not an artifact digest.
++    static uint64_t fingerprint(const std::string& value) {
++        uint64_t result = UINT64_C(14695981039346656037);
++        for (unsigned char c : value) {
++            result ^= c;
++            result *= UINT64_C(1099511628211);
++        }
++        return result;
++    }
++
++    static double monotonic_seconds() {
++        return std::chrono::duration<double>(
++            std::chrono::steady_clock::now().time_since_epoch()).count();
++    }
++
++    void emit(nlohmann::json record) {
++        if (!file_) return;
++        record["schema_version"] = 1;
++        record["monotonic_s"] = monotonic_seconds();
++        const std::string line = record.dump() + '\n';
++        if (std::fwrite(line.data(), 1, line.size(), file_) != line.size()
++            || std::fflush(file_) != 0)
++            throw std::runtime_error("Cannot flush KAYROS_PRICING_TRACE");
++    }
++
++private:
++    std::FILE* file_ = nullptr;
++};
++
++// A root-pricing experiment, deliberately terminated before column admission.
++// It replaces only the dual vector, so an identical captured vector can be
++// compared across implementations without making a solve or closure claim.
++class FirstPricingReplay {
++public:
++    explicit FirstPricingReplay(bool trace_enabled) {
++        const char* path = std::getenv("KAYROS_FIRST_PRICING_REPLAY");
++        if (!path || !*path) return;
++        if (!trace_enabled)
++            throw std::runtime_error("KAYROS_FIRST_PRICING_REPLAY requires KAYROS_PRICING_TRACE");
++        std::ifstream input(path);
++        if (!input) throw std::runtime_error("Cannot read KAYROS_FIRST_PRICING_REPLAY");
++        nlohmann::json fixture;
++        input >> fixture;
++        if (fixture.at("schema_version") != 1)
++            throw std::runtime_error("Unsupported first pricing replay schema");
++        context_ = fixture.at("context");
++        for (const char* key : {"forbidden_arcs", "cuts", "cuts_duals"}) {
++            if (!context_.at(key).is_array() || !context_.at(key).empty())
++                throw std::runtime_error("First pricing replay requires an unconstrained root task");
++        }
++        if (!context_.at("profits").is_array())
++            throw std::runtime_error("First pricing replay profits must be an array");
++        for (const auto& profit : context_.at("profits")) {
++            if (!profit.is_number() || !std::isfinite(profit.get<double>()))
++                throw std::runtime_error("First pricing replay profits must be finite numbers");
++        }
++        enabled_ = true;
++    }
++
++    explicit operator bool() const { return enabled_; }
++
++    void apply(const nlohmann::json& original, std::vector<double>& profits) {
++        if (!enabled_ || used_)
++            throw std::runtime_error("First pricing replay invoked outside its single root call");
++        if (profits.size() != context_.at("profits").size())
++            throw std::runtime_error("First pricing replay vertex count mismatch");
++        for (const char* key : {"forbidden_arcs", "cuts", "cuts_duals"}) {
++            if (original.at(key) != context_.at(key))
++                throw std::runtime_error("First pricing replay root context mismatch");
++        }
++        profits = context_.at("profits").get<std::vector<double>>();
++        used_ = true;
++    }
++
++    [[noreturn]] void finish(PricingTrace& trace) const {
++        trace.emit({{"event", "replay_complete"}, {"call", 1},
++                    {"solver_claim", false}, {"correcting", false}});
++        throw std::runtime_error("MS58_FIRST_PRICING_REPLAY_COMPLETE: intentional diagnostic stop");
++    }
++
++private:
++    bool enabled_ = false;
++    bool used_ = false;
++    nlohmann::json context_;
++};
++
++template<class Instance>
++nlohmann::json replay_instance(const Instance& vrp) {
++    nlohmann::json successors = nlohmann::json::array();
++    for (auto vertex : vrp.D.Vertices()) successors.push_back(vrp.D.Successors(vertex));
++    return {{"event", "replay_instance"}, {"successors", successors},
++            {"start_depot", vrp.o}, {"end_depot", vrp.d}, {"horizon", vrp.T},
++            {"time_windows", vrp.tw}, {"capacity", vrp.Q}, {"demands", vrp.q},
++            {"travel_times", vrp.tau}, {"arrival_times", vrp.arr},
++            {"departure_times", vrp.dep}, {"pretravel_times", vrp.pretau},
++            {"latest_departure", vrp.LDT}};
++}
++
++}  // namespace kayros::lera
+diff --git a/tests/pricing_trace_smoke.cpp b/tests/pricing_trace_smoke.cpp
+new file mode 100644
+index 0000000..06a7772
+--- /dev/null
++++ b/tests/pricing_trace_smoke.cpp
+@@ -0,0 +1,30 @@
++#include "../cpp/lera/bridge/pricing_trace.h"
++
++#include <cassert>
++#include <fstream>
++#include <string>
++
++int main(int argc, char** argv) {
++    assert(argc == 2);
++    unsetenv("KAYROS_PRICING_TRACE");
++    assert(!kayros::lera::PricingTrace());
++    setenv("KAYROS_PRICING_TRACE", argv[1], 1);
++    kayros::lera::PricingTrace trace;
++    assert(trace);
++    trace.emit({{"event", "pricing_begin"}, {"call", 1}});
++    // Read before destruction to verify immediate flushing. No end is invented.
++    std::ifstream input(argv[1]);
++    std::string line;
++    assert(std::getline(input, line));
++    auto record = nlohmann::json::parse(line);
++    assert(record.at("event") == "pricing_begin");
++    assert(record.at("call") == 1);
++    assert(record.at("schema_version") == 1);
++    assert(record.at("monotonic_s").get<double>() > 0.0);
++    assert(!std::getline(input, line));
++    bool refused_existing = false;
++    try { kayros::lera::PricingTrace second; }
++    catch (const std::runtime_error&) { refused_existing = true; }
++    assert(refused_existing);
++    assert(kayros::lera::PricingTrace::fingerprint("a") == UINT64_C(12638187200555641996));
++}

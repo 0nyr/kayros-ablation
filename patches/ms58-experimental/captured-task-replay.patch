@@ -1,0 +1,190 @@
+diff --git a/cpp/lera/bridge/captured_pricing_replay.h b/cpp/lera/bridge/captured_pricing_replay.h
+new file mode 100644
+index 0000000..10c3367
+--- /dev/null
++++ b/cpp/lera/bridge/captured_pricing_replay.h
+@@ -0,0 +1,118 @@
++#pragma once
++
++#include "pricing_trace.h"
++#include <set>
++
++namespace kayros::lera {
++
++// Replays one captured labeling task on the freshly reconstructed instance.
++// The master is never updated, and completion never implies solver closure.
++class CapturedPricingReplay {
++public:
++    explicit CapturedPricingReplay(bool trace_enabled) {
++        const char* path = std::getenv("KAYROS_CAPTURED_PRICING_REPLAY");
++        if (!path || !*path) return;
++        if (!trace_enabled || std::getenv("KAYROS_FIRST_PRICING_REPLAY"))
++            throw std::runtime_error("Captured replay requires trace and excludes first-dual replay");
++        std::ifstream input(path);
++        if (!input) throw std::runtime_error("Cannot read KAYROS_CAPTURED_PRICING_REPLAY");
++        input >> fixture_;
++        if (fixture_.at("schema_version") != 1)
++            throw std::runtime_error("Unsupported captured pricing replay schema");
++        const std::string level = fixture_.at("level").get<std::string>();
++        if (level == "Heuristic Cost") level_ = 0;
++        else if (level == "Heuristic Elementarity") level_ = 1;
++        else if (level == "Exact") level_ = 2;
++        else throw std::runtime_error("Unknown captured pricing level");
++        if (!fixture_.at("source_call").is_number_integer() || fixture_.at("source_call").get<int>() < 1
++            || !fixture_.at("merge_start").is_number_integer() || fixture_.at("merge_start").get<int>() < 0
++            || !fixture_.at("solution_limit").is_number_integer() || fixture_.at("solution_limit").get<int>() < 1
++            || !fixture_.at("closing_state").is_boolean())
++            throw std::runtime_error("Invalid captured labeling controls");
++        for (const char* key : {"partial", "limited_extension", "lazy_extension", "unreachable_strengthened",
++                                "sort_by_cost", "correcting", "symmetric", "step_exact"})
++            if (!fixture_.at("policy").at(key).is_boolean())
++                throw std::runtime_error("Captured replay policy must be explicit booleans");
++        if (fixture_.at("policy").at("ng_routes_enabled") != false
++            || fixture_.at("policy").at("monodirectional_process_limit") != 10)
++            throw std::runtime_error("Captured replay supports the audited no-NG, process-limit-10 policy");
++        const bool step_exact = std::getenv("KAYROS_STEP_EXACT") != nullptr;
++        if (fixture_.at("policy").at("step_exact").get<bool>() != step_exact)
++            throw std::runtime_error("Captured replay step arithmetic differs from this instance");
++        enabled_ = true;
++    }
++
++    explicit operator bool() const { return enabled_; }
++    size_t level_index() const { return level_; }
++    int source_call() const { return fixture_.at("source_call").get<int>(); }
++    const nlohmann::json& fixture() const { return fixture_; }
++
++    template<class Labeling>
++    void configure(Labeling& labeling) const {
++        const auto& policy = fixture_.at("policy");
++        labeling.merge_start = fixture_.at("merge_start").get<int>();
++        labeling.closing_state = fixture_.at("closing_state").get<bool>();
++        labeling.solution_limit = fixture_.at("solution_limit").get<int>();
++        labeling.partial = policy.at("partial").get<bool>();
++        labeling.limited_extension = policy.at("limited_extension").get<bool>();
++        labeling.lazy_extension = policy.at("lazy_extension").get<bool>();
++        labeling.unreachable_strengthened = policy.at("unreachable_strengthened").get<bool>();
++        labeling.sort_by_cost = policy.at("sort_by_cost").get<bool>();
++        labeling.correcting = policy.at("correcting").get<bool>();
++        labeling.symmetric = policy.at("symmetric").get<bool>();
++    }
++
++    template<class Problem>
++    void apply(Problem& problem) {
++        if (!enabled_ || used_) throw std::runtime_error("Captured replay is a single task");
++        const auto& context = fixture_.at("context");
++        const size_t n = problem.P.size();
++        if (!context.at("profits").is_array() || context.at("profits").size() != n)
++            throw std::runtime_error("Captured replay vertex count mismatch");
++        for (const char* key : {"profits", "cuts_duals"}) {
++            if (!context.at(key).is_array()) throw std::runtime_error("Captured replay duals must be arrays");
++            for (const auto& value : context.at(key))
++                if (!value.is_number() || !std::isfinite(value.template get<double>()))
++                    throw std::runtime_error("Captured replay duals must be finite");
++        }
++        if (!context.at("cuts").is_array() || context.at("cuts").size() != context.at("cuts_duals").size()
++            || !context.at("forbidden_arcs").is_array())
++            throw std::runtime_error("Captured replay cut or arc shape mismatch");
++        auto vertex = [n](const nlohmann::json& value) {
++            if (!value.is_number_integer() || value.get<int>() < 0 || static_cast<size_t>(value.get<int>()) >= n)
++                throw std::runtime_error("Captured replay vertex outside instance");
++            return value.get<int>();
++        };
++        problem.P = context.at("profits").template get<std::vector<double>>();
++        problem.sigma = context.at("cuts_duals").template get<std::vector<double>>();
++        problem.A.clear();
++        for (const auto& arc : context.at("forbidden_arcs")) {
++            if (!arc.is_array() || arc.size() != 2) throw std::runtime_error("Captured replay arc must have two vertices");
++            problem.A.emplace_back(vertex(arc[0]), vertex(arc[1]));
++        }
++        problem.S.clear();
++        for (const auto& vertices : context.at("cuts")) {
++            if (!vertices.is_array() || vertices.size() != 3) throw std::runtime_error("Captured replay cut must have three vertices");
++            typename decltype(problem.S)::value_type cut;
++            std::set<int> unique;
++            for (const auto& value : vertices) { const int v = vertex(value); unique.insert(v); cut.set(v); }
++            if (unique.size() != 3) throw std::runtime_error("Captured replay cut vertices must be distinct");
++            problem.S.push_back(cut);
++        }
++        used_ = true;
++    }
++
++    [[noreturn]] void finish(PricingTrace& trace) const {
++        trace.emit({{"event", "captured_replay_complete"}, {"source_call", source_call()},
++                    {"solver_claim", false}, {"policy", fixture_.at("policy")}});
++        throw std::runtime_error("MS58_CAPTURED_PRICING_REPLAY_COMPLETE: intentional diagnostic stop");
++    }
++
++private:
++    bool enabled_ = false;
++    bool used_ = false;
++    size_t level_ = 0;
++    nlohmann::json fixture_;
++};
++
++}  // namespace kayros::lera
+diff --git a/cpp/lera/bridge/lera_bridge.cpp b/cpp/lera/bridge/lera_bridge.cpp
+index 3a989dd..eaf1d32 100644
+--- a/cpp/lera/bridge/lera_bridge.cpp
++++ b/cpp/lera/bridge/lera_bridge.cpp
+@@ -2,6 +2,7 @@
+ #include "goc/linear_programming/solver/ablation_settings.h"
+ #include "lera_bridge.h"
+ #include "pricing_trace.h"
++#include "captured_pricing_replay.h"
+ 
+ #include <cstdint>
+ #include <cstdlib>
+@@ -83,6 +84,7 @@ kayros::RouteEval checker_eval(const kayros::Instance& ci, const goc::GraphPath&
+ std::string solve_duration_json(const std::string& payload, const SolveParams& params) {
+     PricingTrace pricing_trace;
+     FirstPricingReplay first_replay(static_cast<bool>(pricing_trace));
++    CapturedPricingReplay captured_replay(static_cast<bool>(pricing_trace));
+     goc::ablation_backend_settings() = nlohmann::json::object();
+     // M13.3: pin the PWL vertical arithmetic for the whole solve, from the
+     // same KAYROS_STEP_EXACT flag the Python bridge sets per instance and the
+@@ -110,7 +112,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     preprocess_triangle_depot(inst);
+ 
+     nyr::VRPInstance vrp = inst.get<nyr::VRPInstance>();
+-    if (first_replay) pricing_trace.emit(replay_instance(vrp));
++    if (first_replay || captured_replay) pricing_trace.emit(replay_instance(vrp));
+ 
+     // Create SPF and add initial routes (o, i, d) with checker-exact costs
+     // (M5.6 stage A: every master objective coefficient is the checker value
+@@ -235,7 +237,13 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+             replay_pp = original_pp;
+             first_replay.apply(nlohmann::json(original_pp), replay_pp.P);
+         }
+-        const PricingProblem& pp = first_replay ? replay_pp : original_pp;
++        if (captured_replay) {
++            replay_pp = original_pp;
++            captured_replay.apply(replay_pp);
++            captured_replay.configure(lbl);
++            heuristic_level = captured_replay.level_index();
++        }
++        const PricingProblem& pp = first_replay || captured_replay ? replay_pp : original_pp;
+         vector<Route> R;
+         // (M5.2) Residual budget from the BCP's single absolute deadline,
+         // not from a per-call stopwatch chain.
+@@ -259,6 +267,13 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+                 begin["original_context"] = original_pp;
+                 begin["correcting"] = false;
+             }
++            if (captured_replay) {
++                begin["captured_replay"] = true;
++                begin["source_call"] = captured_replay.source_call();
++                begin["captured_fixture"] = captured_replay.fixture();
++                begin["original_context"] = original_pp;
++                begin["correcting"] = lbl.correcting;
++            }
+             pricing_trace.emit(std::move(begin));
+             trace_started = PricingTrace::monotonic_seconds();
+         }
+@@ -291,6 +306,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+             pricing_trace.emit(std::move(end));
+         }
+         if (first_replay) first_replay.finish(pricing_trace);
++        if (captured_replay) captured_replay.finish(pricing_trace);
+         last_exact_finished = heuristic_level == levels.size() - 1 && lbl_log.status == BLBStatus::Finished;
+         if (last_exact_finished) ++exact_finished;
+ 

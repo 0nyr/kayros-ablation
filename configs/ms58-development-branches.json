@@ -1,0 +1,94 @@
+{
+  "scope": "Diagnostic and candidate branches, no production integration or main-campaign approval.",
+  "identities": [
+    {
+      "worktree": "$WORKSPACE/kayros-proof-reference",
+      "base": "50eebc57964ac4f6762719ff21033783a31c12da",
+      "commit": "07879253091fe9e895cc8071aa69ccd0b2310634",
+      "branch": "proof-speed/reference",
+      "patch": "patches/ms58-experimental/corrected-reference.patch",
+      "sha256": "662fc0c37e77e199ef41ca22b36b7406bc35096a165c52a767bf8c7ca51d0ccf"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-normalize",
+      "base": "07879253091fe9e895cc8071aa69ccd0b2310634",
+      "commit": "eed117b14a86b1573eab6d55d967d519b8578cc3",
+      "branch": "proof-speed/normalize-in-place",
+      "patch": "patches/ms58-experimental/normalize.patch",
+      "sha256": "5392ef6f1b2f028d09a4e0eb46d514112cd2427cdc30ca24484102ac4319fb3f"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-diagnostics",
+      "base": "07879253091fe9e895cc8071aa69ccd0b2310634",
+      "commit": "64a3e28282f35c2d9fac51b9f3776a153f0cc983",
+      "branch": "proof-speed/diagnostics",
+      "patch": "patches/ms58-experimental/first-replay-kayros.patch",
+      "sha256": "d22b8261b212112001a9cb49026c5ae531915779476cfdb73c74ce0f74c8b6fc"
+    },
+    {
+      "worktree": "$WORKSPACE/lera-proof-diagnostics",
+      "base": "f931288378450a5b3b3e2bb95a308d170444d545",
+      "commit": "0dbf574d534c020775bb57723124c2b4a9270f35",
+      "branch": "proof-speed/upstream-diagnostics",
+      "patch": "patches/ms58-experimental/first-replay-upstream.patch",
+      "sha256": "215d5af43fe61060484f9db8f7df97bc86f25b78418fd4ee295ebf77e25600ca"
+    },
+    {
+      "worktree": "$WORKSPACE/lera-proof-correction",
+      "base": "f931288378450a5b3b3e2bb95a308d170444d545",
+      "commit": "92ae0006129b35da2594e47621bb0c6c37bb5dd7",
+      "branch": "proof-speed/correction-control",
+      "patch": "patches/ms58-experimental/correction-control.patch",
+      "sha256": "32257003657d10d86d32dba9522154b1d81d0e0f39732ee571287a8fe299b3fa"
+    },
+    {
+      "worktree": "$WORKSPACE/lera-proof-minimal-reference",
+      "base": "f931288378450a5b3b3e2bb95a308d170444d545",
+      "commit": "f2c9e205bd1ecc9afb45d5efe7fcb0df881f2b33",
+      "branch": "proof-speed/minimal-reference",
+      "patch": "patches/ms58-experimental/minimal-upstream.patch",
+      "sha256": "ba75d827faff78c1c12fe73774ca658fe28fe96cd4806ee69502db8e6f685bbf"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-point-addition",
+      "base": "07879253091fe9e895cc8071aa69ccd0b2310634",
+      "commit": "250105c02b9d5d0a3bf0f352bcea5049a46a8867",
+      "branch": "proof-speed/point-addition",
+      "patch": "patches/ms58-experimental/point-addition.patch",
+      "sha256": "3d6526345662778dc686fadab6524e062ff16b272000bdbaa43f220066638aeb"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-task-replay",
+      "base": "64a3e28282f35c2d9fac51b9f3776a153f0cc983",
+      "commit": "00158011921c7675663a51b6adfedc3a782bbc85",
+      "branch": "proof-speed/captured-task-replay",
+      "patch": "patches/ms58-experimental/captured-task-replay.patch",
+      "sha256": "63c3e1fd3f2d10055765ab744940a4b0724b7fdf949acc38c003b0b6e1aaacf8"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-point-replay",
+      "base": "00158011921c7675663a51b6adfedc3a782bbc85",
+      "commit": "db5312f3b431517f45c31685d9143d1f4bc9664f",
+      "branch": "proof-speed/point-task-replay",
+      "patch": "patches/ms58-experimental/point-task-replay.patch",
+      "sha256": "3d6526345662778dc686fadab6524e062ff16b272000bdbaa43f220066638aeb"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-canonical",
+      "base": "07879253091fe9e895cc8071aa69ccd0b2310634",
+      "commit": "37e48018f7cec729b7ad1a6944c2d8dba3fbc3e6",
+      "branch": "proof-speed/canonical-reductions",
+      "patch": "patches/ms58-experimental/canonical-reductions.patch",
+      "sha256": "2c2d8c5c816fbd40091604a2850f370b77019e82689976679689edd7c5f1f51b"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-canonical-normalize",
+      "base": "37e48018f7cec729b7ad1a6944c2d8dba3fbc3e6",
+      "commit": "0bec4d455c7960737667b7ce4e8e282a52bb268b",
+      "branch": "proof-speed/canonical-normalize",
+      "patch": "patches/ms58-experimental/canonical-normalize.patch",
+      "sha256": "8b98cc35d5f6d14e263ebed7db75a26e2a53b87fc739592451e5d843d350e119"
+    }
+  ],
+  "point_addition_comment_only_followup": "ea6097e"
+}
