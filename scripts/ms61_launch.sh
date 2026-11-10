@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # Run on Kenzae: ms61_launch.sh JOB_ID PLAN.json OUT_DIR JOBS
 # OUT_DIR is remote. A relative OUT_DIR lives under ~/ms61-bpc/runs/.
-# Copies the ms61 scripts (to ~/ms61-bpc/scripts and a frozen copy in OUT_DIR/scripts) and the plan (OUT_DIR/plan.json),
-# then starts one detached runner per host of the job, shard i/k round-robin over the plan cells.
-# Environment: MS61_RUNNER_PYTHON (default ~/ms56-ablation/experiment/.venv/bin/python), MS61_RUNNER_ARGS (extra runner flags, e.g. "--grace-s 20"),
-# MS61_FORCE_PLAN=1 to replace a different plan already present in OUT_DIR.
+# Copies the ms61 scripts (to ~/ms61-bpc/scripts and a frozen copy in OUT_DIR/scripts) and the plan (OUT_DIR/plan.json), then starts one detached runner per host of the job, shard i/k round-robin over the plan cells.
+# Environment: MS61_RUNNER_PYTHON (default ~/ms56-ablation/experiment/.venv/bin/python), MS61_RUNNER_ARGS (extra runner flags, e.g. "--grace-s 20"), MS61_FORCE_PLAN=1 to replace a different plan already present in OUT_DIR.
 set -euo pipefail
 job=${1:?usage: ms61_launch.sh JOB_ID PLAN.json OUT_DIR JOBS}
 plan=$(realpath "${2:?usage: ms61_launch.sh JOB_ID PLAN.json OUT_DIR JOBS}")

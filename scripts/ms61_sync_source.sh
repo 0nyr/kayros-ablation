@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run on Kenzae. Copies a local Kayros worktree to nancy.g5k:~/ms61-bpc/sources/<name>/ (no .git, no build/, no __pycache__).
 # Records the local HEAD, the dirty flag, the dirty file list and the cpp/+src/ content hash in SOURCE_ID next to the copy.
-# The remote build/ directory is preserved so that ms61_build.sh can rebuild incrementally.
+# The remote build/ directory is left alone here. ms61_build.sh always removes build/cplex and builds from scratch.
 set -euo pipefail
 local_tree=$(realpath "${1:?usage: ms61_sync_source.sh LOCAL_WORKTREE NAME}")
 name=${2:?usage: ms61_sync_source.sh LOCAL_WORKTREE NAME}

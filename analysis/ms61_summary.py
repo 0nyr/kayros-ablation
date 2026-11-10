@@ -3,8 +3,7 @@
 Usage (pinned checker in the workspace dev shell):
   nix develop ../nix-dev --command python analysis/ms61_summary.py outputs/ms61/<run> [--output FILE] [--slow-s 5]
 
-For every cell it reports status, closure time, final value, final lower bound, B&B nodes and root work
-(CG iterations, columns, cuts, pricing calls and time per pricing level) plus the slow root iterations from the stderr table.
+For every cell it reports status, closure time, final value, final lower bound, B&B nodes and root work (CG iterations, columns, cuts, pricing calls and time per pricing level) plus the slow root iterations from the stderr table.
 Validation re-checks every produced route set with mamut-routing-lib 0.11.0 (identity checked by scripts/checker_contract.py).
 It then checks closures (Kayros census and checker guard) and cross-cell consistency per instance against all checked feasible costs and the frozen reference.
 Any violation is printed as SOUNDNESS ALERT and recorded in summary.json (default OUT/summary.json).

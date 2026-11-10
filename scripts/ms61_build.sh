@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Run ON A G5K COMPUTE NODE inside a job, e.g.
 #   ssh nancy.g5k "OAR_JOB_ID=<job> oarsh <node> 'bash -l ~/ms61-bpc/scripts/ms61_build.sh ~/ms61-bpc/sources/<name> ~/ms61-bpc/venvs/<name>'"
-# Builds the Kayros CPLEX wheel (Lera bridge, CPLEX 12.10, same cmake defines as ms58_correction_batch_build.sh),
-# then creates a fresh venv with the pinned checker requirements and that wheel.
+# Builds the Kayros CPLEX wheel (Lera bridge, CPLEX 12.10, same cmake defines as ms58_correction_batch_build.sh), then creates a fresh venv with the pinned checker requirements and that wheel.
 # Side files next to the venv: <venv>.wheel/ (wheel), <venv>.build.log and <venv>.build-info.json.
 set -euo pipefail
 src=$(realpath "${1:?usage: ms61_build.sh SOURCE_DIR VENV_DIR}")
@@ -39,6 +38,8 @@ start_epoch=$(date +%s)
     sha256sum "$CPLEX_BIN"
     [[ -f "$src/SOURCE_ID" ]] && cat "$src/SOURCE_ID"
     rm -rf "$wheel_dir"
+    # Always build from scratch: rsync keeps source mtimes, so an incremental build could miss changed files.
+    rm -rf "$src/build/cplex"
     cd "$src"
     "$uv" build --python 3.13 --wheel . \
         --out-dir "$wheel_dir" \
