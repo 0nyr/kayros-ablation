@@ -27,7 +27,7 @@ Resuming is always the same launch command: cells with a `cell.json` are skipped
 
 ## Commands
 
-All Kenzae commands run from `$WORKSPACE/kayros-ablation`. Replace `K17` by the name chosen for the Kayros 1.7 source, `JOB` by the OAR job id and `NODE` by one of its hosts. The link to nancy is lossy: wrap idempotent commands in the retrying helper (`g5k`) and run `oarsub` exactly once, then check `oarstat -u $USER` before any retry.
+All Kenzae commands run from `$WORKSPACE/kayros-ablation`. Replace `K17` by the name chosen for the Kayros 1.7 source, `JOB` by the OAR job id and `NODE` by one of its hosts. `g5k` is the retrying ssh helper of the coordinating session (`g5k [-t seconds] '<remote command>'`, retries on timeouts and ssh errors), plain `ssh -S none nancy.g5k` works too. The link to nancy is lossy: wrap idempotent commands in the retrying helper (`g5k`) and run `oarsub` exactly once, then check `oarstat -u $USER` before any retry.
 
 ### 1. Sync the source (Kenzae)
 
@@ -94,7 +94,7 @@ rsync -az -e 'ssh -S none' nancy.g5k:ms61-bpc/runs/final/analysis/ outputs/ms61/
 nix develop ../nix-dev --command python analysis/ms61_final_analysis.py outputs/ms61/final --figures-only
 ```
 
-The numeric pass re-checks every route set. In the smoke it took about 4 s for 50 cells with 30 workers. Its cost grows with the number of ILS incumbents, so for 1,400 cells expect minutes, not hours (an extrapolation, not a measurement). A node must still be reserved for it: run it before releasing the campaign job, or reserve one node for 30 minutes.
+The numeric pass re-checks every route set. In the smoke it took 1.5 s wall time and 76 MiB for 50 cells with 30 workers on grvingt. Its cost grows with the number of ILS incumbents, so for 1,400 cells expect minutes, not hours (an extrapolation, not a measurement). A node must still be reserved for it: run it before releasing the campaign job, or reserve one node for 30 minutes.
 
 ### 7. Archive, verify, clean up
 
@@ -124,3 +124,17 @@ The analysis implements sections 4 to 6 of the ms55 design and `configs/main-ana
 - Internal cross-checks: the squeezed-gap, 1 % goal, coverage and closure curves are compared with ms58's `curves()`, Λ with `pilot_summary.score_trace` (locally only, its imports are not staged), and the restricted mean with the area under 1 - F.
 
 Offline regression: on the archived wave `broad3` the analysis reproduces the documented 32 closures and 919.8 s for `lera-f3` and 31 and 963.7 s for `F-pk`, with zero alerts. On the ms58 five-arm panel (converted by `analysis/ms61_adapt_ms58_panel.py`) it reproduces ms58's closure counts, restricted means and Λ for Lera, cold CPLEX and both full arms. For cold HiGHS it rejects the 3 RC105 closures that carry `checker_infeasible_columns = 1`, where ms58 only flagged them as guard warnings.
+
+## Smoke of 2026-11-11 (job 7014937, grvingt-7 and grvingt-8)
+
+Plan `configs/ms61/final-smoke.json`: C101, R101, RC105, C201 and R201, all 5 arms, 2 trials, 600 s, 15 s prefix, 10 lanes per host, source `ms61-c10` (CPLEX venv `ms61-c10`, HiGHS venv `ms61-c10-highs` built in this smoke) with the leading-arm environment. All 50 cells finished, none failed. Archive: `outputs/ms61/final-smoke/` (278 files, 6,760,375 bytes, identical counts and totals on both sides before the remote deletion).
+
+| Arm | Accepted closures | Restricted mean time to proof (s) | Mean Λ | Reference attained |
+| --- | ---: | ---: | ---: | ---: |
+| `lera-exact` | 10 / 10 | 108.0 | 0.05201 | 10 / 10 |
+| `kayros-bpca-cplex` | 10 / 10 | 132.1 | 0.10045 | 10 / 10 |
+| `kayros-bpca-highs` | 4 / 10 (2 rejected) | 361.5 | 0.40429 | 8 / 10 |
+| `kayros-heuristics` | no proof capability | no proof capability | 0.00617 | 5 / 10 |
+| `kayros-full-cplex` | 9 / 10 | 162.5 | 0.00277 | 10 / 10 |
+
+Every closure of every arm, including the 2 rejected ones, matches the frozen reference (C101 97901.1137, R101 26857.5262, RC105 23376.8126, C201 96115.8211, R201 22389.2998). The 2 soundness alerts are the 2 cold HiGHS closures of RC105, which report `checker_infeasible_columns = 1` (the ms61 rule rejects them, ms58 flagged the same case on RC105 as a guard warning). Every full cell ends its prefix at 15.00 s, starts the exact phase within 7 ms with `warm_start: true` and the handoff witness, and its native `exact.warm_start` reports the given routes. Every ILS cell runs to 600.1 s with its plan seed and 5 to 31 checked candidates. Every HiGHS cell reports `LP_BACKEND` HiGHS. The remote launcher dispatched both runners in 0.6 s and 0.9 s (parallel `oarsh`), the whole launch ssh call took 23 s, and a second launch while the runners were live was refused by both per-host locks.
