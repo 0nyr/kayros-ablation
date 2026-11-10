@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "updated_date": "2026-11-09",
+  "updated_date": "2026-11-10",
   "status": "held_for_kayros_proof_speed_improvement",
   "main_launch_authorized": false,
-  "decision_source": "Author rejected the pilot-based launch recommendation and requested Kayros proof-speed improvement before resuming the main experiment.",
+  "decision_source": "Author requests Dabia2013-only development toward beating minimally corrected Lera on n=100, with an authorized 1-hour five-arm candidate panel.",
   "plan": "docs/proof-speed-improvement-plan.md",
   "archived_proposal": {
     "path": "configs/main-proposal.json",
@@ -16,11 +16,26 @@
     "status": "historical_pilot_snapshot"
   },
   "resume_conditions": [
-    "Identify and close Kayros's measured proof-speed gap against the fixed original Lera-Romero baseline.",
+    "Identify and close Kayros's measured proof-speed gap against the explicitly documented minimally corrected Lera baseline on Dabia2013 n=100.",
     "Demonstrate improvement under a comparison design fixed before confirmation, preserving unfavorable outcomes and the anytime comparison.",
     "Review the resulting evidence and updated main design with the author before launch."
   ],
   "development_authorized": true,
   "development_started_in_handoff": false,
-  "note": "This is a decision record, not an execution lock. The existing distributed driver does not read this file."
+  "note": "This is a decision record, not an execution lock. The existing distributed driver does not read this file.",
+  "current_development_plan": "docs/ms58-dabia-development-plan.md",
+  "current_development": {
+    "authorized": true,
+    "family": "TDVRPTW/Dabia2013",
+    "allowed_n": [
+      25,
+      50,
+      100
+    ],
+    "primary_performance_n": 100,
+    "horizon_s": 3600,
+    "baseline_source": "f2c9e20",
+    "kayros_backend": "cplex",
+    "explicit_exception": "cold HiGHS comparison arm"
+  }
 }

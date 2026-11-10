@@ -1,0 +1,256 @@
+diff --git a/cpp/lera/main/include/labeling/monodirectional_labeling.h b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+index c9c06fb..b6cf1a5 100644
+--- a/cpp/lera/main/include/labeling/monodirectional_labeling.h
++++ b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+@@ -17,6 +17,7 @@
+ #include "lazy_label.h"
+ #include "bcp/pricing_problem.h"
+ #include "ng_neighborhoods.h"
++#include "pwl_domination_function.h"
+ 
+ namespace solver
+ {
+@@ -101,6 +102,8 @@ private:
+ 	nyr::VRPInstance vrp_;
+ 	PricingProblem pp_;
+ 	Label no_label; // null object pattern of the label to avoid using ifs.
++	// Calls are sequential within each labeling direction. No label owns this storage.
++	mutable PWLDominationFunction domination_scratch_;
+ };
+ } // namespace
+ 
+diff --git a/cpp/lera/main/include/labeling/pwl_domination_function.h b/cpp/lera/main/include/labeling/pwl_domination_function.h
+index 986937a..a9be1f0 100644
+--- a/cpp/lera/main/include/labeling/pwl_domination_function.h
++++ b/cpp/lera/main/include/labeling/pwl_domination_function.h
+@@ -21,8 +21,16 @@ namespace solver
+ class PWLDominationFunction
+ {
+ public:
++	PWLDominationFunction() = default;
++
+ 	// Creates a PWLDominationFunction with f's pieces.
+ 	PWLDominationFunction(const goc::PWLFunction& f);
++
++	// Replaces all logical state while retaining temporary vector capacity.
++	void Reset(const goc::PWLFunction& f);
++
++	// Releases temporary storage between pricing tasks.
++	void Release();
+ 	
+ 	// Converts this function to a PWLFunction.
+ 	explicit operator goc::PWLFunction() const;
+@@ -53,8 +61,8 @@ private:
+ 	
+ 	std::vector<goc::LinearFunction> pieces_;
+ 	std::vector<int> next_;
+-	int first_, last_, size_;
+-	goc::Interval domain_; // minimum and maximum values of t where f(t) is in domain.
++	int first_ = -1, last_ = -1, size_ = 0;
++	goc::Interval domain_{goc::INFTY, -goc::INFTY}; // minimum and maximum values of t where f(t) is in domain.
+ };
+ } // namespace
+ 
+diff --git a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+index 8dddf33..e0f0363 100644
+--- a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+@@ -420,7 +420,8 @@ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ 	if (l->v == vrp_.d) return epsilon_bigger_equal(l->min_cost, 0.0);
+ 	
+ 	// Create function Delta which will be dominated.
+-	PWLDominationFunction Delta = l->duration;
++	auto& Delta = domination_scratch_;
++	Delta.Reset(l->duration);
+ 	double l_beta = beta(l, partial);
+ 	trace_domination_detail = trace::on() && trace::prefix_len(l) > 0;
+ 	
+@@ -490,7 +491,8 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 				// theta = p(l) + cut_cost(l) - p(m) - cut_cost(m) - \sum {sigma(i) : cut_visited[i](m) == 1 && cut_visited[i](l) != 1 }.
+ 				double theta = l->p + l->cut_cost - m->p - m->cut_cost;
+ 				for (int i: m->cut_nz) if (l->cut_visited[i] != 1) theta -= pp_.sigma[i];
+-				PWLDominationFunction Delta(l->duration);
++				auto& Delta = domination_scratch_;
++				Delta.Reset(l->duration);
+ 				if (partial)
+ 				{
+ 					Delta.DominatePieces(m->duration, theta);
+@@ -547,6 +549,7 @@ vector<LazyLabel> MonodirectionalLabeling::EnumerationStep(Label* l) const
+ 
+ void MonodirectionalLabeling::Clean()
+ {
++	domination_scratch_.Release();
+ 	processed_count = 0;
+ 	for (auto& entry: U)
+ 		for (auto& entry_2: entry)
+@@ -554,4 +557,4 @@ void MonodirectionalLabeling::Clean()
+ 				delete m;
+ 	U = vector<DemandLevel>(vrp_.D.NbVertices());
+ }
+-} // solver
+\ No newline at end of file
++} // solver
+diff --git a/cpp/lera/main/src/labeling/pwl_domination_function.cpp b/cpp/lera/main/src/labeling/pwl_domination_function.cpp
+index b8c1d20..e8a76fd 100644
+--- a/cpp/lera/main/src/labeling/pwl_domination_function.cpp
++++ b/cpp/lera/main/src/labeling/pwl_domination_function.cpp
+@@ -62,6 +62,13 @@ static double completion_base(const PWLFunction& f2)
+ 
+ PWLDominationFunction::PWLDominationFunction(const PWLFunction& f)
+ {
++	Reset(f);
++}
++
++void PWLDominationFunction::Reset(const PWLFunction& f)
++{
++	pieces_.clear();
++	next_.clear();
+ 	// Add all f's pieces in order.
+ 	size_ = 0;
+ 	int i = first_ = last_ = -1;
+@@ -71,6 +78,15 @@ PWLDominationFunction::PWLDominationFunction(const PWLFunction& f)
+ 	domain_ = f.Domain();
+ }
+ 
++void PWLDominationFunction::Release()
++{
++	vector<LinearFunction>().swap(pieces_);
++	vector<int>().swap(next_);
++	first_ = last_ = -1;
++	size_ = 0;
++	domain_ = {INFTY, -INFTY};
++}
++
+ PWLDominationFunction::operator PWLFunction() const
+ {
+ 	PWLFunction f;
+@@ -281,4 +297,4 @@ int PWLDominationFunction::AddPieceAfter(int i, const LinearFunction& piece)
+ 	domain_ = {pieces_[first_].domain.left, pieces_[last_].domain.right};
+ 	return j;
+ }
+-} // namespace
+\ No newline at end of file
++} // namespace
+diff --git a/tests/cpp/test_dominance_scratch.cpp b/tests/cpp/test_dominance_scratch.cpp
+new file mode 100644
+index 0000000..e5ec8a8
+--- /dev/null
++++ b/tests/cpp/test_dominance_scratch.cpp
+@@ -0,0 +1,117 @@
++#include "labeling/pwl_domination_function.h"
++
++#include <bit>
++#include <cstdint>
++#include <cstdlib>
++#include <iostream>
++#include <new>
++#include <stdexcept>
++
++namespace {
++bool counting_allocations = false;
++std::size_t allocation_count = 0;
++}
++
++void* operator new(std::size_t size) {
++    if (counting_allocations) ++allocation_count;
++    if (void* memory = std::malloc(size ? size : 1)) return memory;
++    throw std::bad_alloc();
++}
++void operator delete(void* memory) noexcept { std::free(memory); }
++void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
++
++using namespace goc;
++using solver::PWLDominationFunction;
++
++namespace {
++void require(bool condition, const char* message) {
++    if (!condition) throw std::runtime_error(message);
++}
++
++bool same(double left, double right) {
++    return std::bit_cast<std::uint64_t>(left) == std::bit_cast<std::uint64_t>(right);
++}
++
++void same_function(const PWLFunction& left, const PWLFunction& right) {
++    require(left.PieceCount() == right.PieceCount(), "Piece count changed after scratch reset");
++    require(same(left.Domain().left, right.Domain().left) && same(left.Domain().right, right.Domain().right), "Domain changed after scratch reset");
++    require(same(left.Image().left, right.Image().left) && same(left.Image().right, right.Image().right), "Image changed after scratch reset");
++    for (int i = 0; i < left.PieceCount(); ++i) {
++        const auto& a = left.Piece(i);
++        const auto& b = right.Piece(i);
++        require(same(a.domain.left, b.domain.left) && same(a.domain.right, b.domain.right)
++                && same(a.image.left, b.image.left) && same(a.image.right, b.image.right)
++                && same(a.slope, b.slope) && same(a.intercept, b.intercept), "Piece arithmetic or vertical tag changed after scratch reset");
++    }
++}
++
++PWLFunction fixture(int index) {
++    PWLFunction result;
++    if (index % 11 == 0) return result;
++    const int pieces = 1 + index % 19;
++    for (int i = 0; i < pieces; ++i) {
++        const double x = 2.0 * i;
++        const double y = 3.0 + 0.25 * ((index + i) % 7);
++        result.AddPiece(LinearFunction({x, y}, {x + 2.0, y + (i % 2 ? 1.0 : -0.5)}));
++        if (i + 1 < pieces && (index + i) % 3 == 0) {
++            auto vertical = LinearFunction({x + 2.0, y + 1.0}, {x + 2.0, y - 0.5});
++            if (index % 2) vertical = vertical.as_choice_vertical();
++            result.AddPiece(vertical);
++        }
++    }
++    return result;
++}
++}
++
++int main() {
++    try {
++        PWLDominationFunction reused;
++        std::size_t cases = 0;
++        for (bool exact : {false, true}) {
++            StepExactArithmeticScope scope(exact);
++            for (int iteration = 0; iteration < 512; ++iteration) {
++                const auto input = fixture(iteration);
++                PWLDominationFunction fresh(input);
++                reused.Reset(input);
++                same_function(static_cast<PWLFunction>(fresh), static_cast<PWLFunction>(reused));
++                if (!input.Empty()) {
++                    for (int pass = 0; pass < 3; ++pass) {
++                        PWLFunction dominator({LinearFunction({0.0, 2.0 + pass}, {64.0, 4.0 + pass})});
++                        const bool expected = fresh.DominatePieces(dominator, 0.25 * (iteration % 5));
++                        const bool observed = reused.DominatePieces(dominator, 0.25 * (iteration % 5));
++                        require(expected == observed, "Domination verdict changed after scratch reset");
++                        same_function(static_cast<PWLFunction>(fresh), static_cast<PWLFunction>(reused));
++                    }
++                }
++                if (iteration % 13 == 0) reused.Release();
++                ++cases;
++            }
++        }
++        const auto input = fixture(37);
++        reused.Reset(input);
++        allocation_count = 0;
++        counting_allocations = true;
++        for (int i = 0; i < 1000; ++i) {
++            PWLDominationFunction fresh(input);
++            if (fresh.Empty()) std::abort();
++        }
++        counting_allocations = false;
++        const auto fresh_allocations = allocation_count;
++        allocation_count = 0;
++        counting_allocations = true;
++        for (int i = 0; i < 1000; ++i) reused.Reset(input);
++        counting_allocations = false;
++        const auto reused_allocations = allocation_count;
++        require(fresh_allocations >= 2000, "Fresh construction did not exercise both allocation sites");
++        require(reused_allocations == 0, "Fixed-size scratch reset still allocated");
++        reused.Release();
++        require(reused.Empty(), "Release left logical pieces");
++        std::cout << "PASS cases=" << cases << " fresh_allocations=" << fresh_allocations
++                  << " reused_allocations=" << reused_allocations << '\n';
++        return 0;
++    } catch (const std::exception& error) {
++        counting_allocations = false;
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++}

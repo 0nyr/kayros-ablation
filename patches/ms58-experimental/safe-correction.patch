@@ -1,0 +1,612 @@
+diff --git a/cpp/lera/bridge/lera_bridge.cpp b/cpp/lera/bridge/lera_bridge.cpp
+index 4926dc1..fc01dd5 100644
+--- a/cpp/lera/bridge/lera_bridge.cpp
++++ b/cpp/lera/bridge/lera_bridge.cpp
+@@ -391,6 +391,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     nlohmann::json result;
+     result["effective_backend_settings"] = goc::ablation_backend_settings();
+     result["effective_algorithm_settings"] = {{"cut_limit", params.cut_limit}, {"cut_violation_threshold", 0.1}, {"algorithm_epsilon", 1e-6}, {"solution_limit", params.solution_limit}, {"node_limit", params.node_limit}, {"stab_alpha", params.stab_alpha}, {"ng_routes", false}};
++    result["effective_algorithm_settings"]["label_correction"] = lbl.correcting;
+     result["exact_log"] = log;
+     result["bound_events"] = bound_events;
+     result["closure_census"] = closure_census();
+diff --git a/cpp/lera/main/include/labeling/bidirectional_labeling.h b/cpp/lera/main/include/labeling/bidirectional_labeling.h
+index db06db3..734ad72 100644
+--- a/cpp/lera/main/include/labeling/bidirectional_labeling.h
++++ b/cpp/lera/main/include/labeling/bidirectional_labeling.h
+@@ -58,6 +58,9 @@ public:
+ 	);
+ 	
+ private:
++	friend struct CorrectionInvariantTest;
++	void RefreshCorrectedMergeLabels(int direction);
++
+ 	// Sets the labeling level flags based on the given level.
+ 	void setup_labeling_level_flag(
+ 		LabelingLevel level
+diff --git a/cpp/lera/main/include/labeling/monodirectional_labeling.h b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+index c9c06fb..0cc5b86 100644
+--- a/cpp/lera/main/include/labeling/monodirectional_labeling.h
++++ b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+@@ -74,6 +74,14 @@ public:
+ 	LazyLabel Init() const;
+ 	
+ private:
++	friend class BidirectionalLabeling;
++	friend struct CorrectionInvariantTest;
++	// Removed labels can remain parents of queued or processed labels.
++	// Retain their ownership until the whole pricing call is cleaned.
++	std::vector<Label*> retired_labels_;
++	// Correction changes keys shared with the bidirectional merge index.
++	std::vector<std::pair<goc::Vertex, nyr::CapacityUnit>> corrected_merge_buckets_;
++
+ 	// The extension step consists in taking a lazy label and building the complete label.
+ 	// Returns: the extended full label (notice that it may be infeasible, so it may be nullptr).
+ 	Label* ExtensionStep(const LazyLabel& ll) const;
+diff --git a/cpp/lera/main/src/labeling/bidirectional_labeling.cpp b/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
+index 3170e81..025f982 100644
+--- a/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
+@@ -9,7 +9,10 @@
+ #include "bcp/pricing_problem.h"
+ 
+ #include <climits>
++#include <algorithm>
+ #include <cstdlib>
++#include <stdexcept>
++#include <string>
+ 
+ #include "labeling/trace.h"
+ 
+@@ -191,6 +194,14 @@ BidirectionalLabeling::BidirectionalLabeling(
+ 	partial = limited_extension = lazy_extension = unreachable_strengthened = sort_by_cost = true;
+ 	elementary_check_relaxation = cost_check_relaxation = ng_routes_relaxation = false;
+ 	correcting = false;
++	// Experimental diagnostic opt-in. The default algorithm remains unchanged.
++	if (const char* setting = std::getenv("KAYROS_DIAGNOSTIC_CORRECTING"))
++	{
++		const std::string value(setting);
++		if (value != "0" && value != "1")
++			throw std::invalid_argument("KAYROS_DIAGNOSTIC_CORRECTING must be 0 or 1");
++		correcting = value == "1";
++	}
+ 	// M5.9: `symmetric` was NEVER initialized (upstream set it from the
+ 	// experiment JSON, e.g. bpc_lera.json: false; the vendoring dropped that
+ 	// wiring), so line ~172 read an indeterminate value: per-binary-
+@@ -320,11 +331,20 @@ BLBExecutionLog BidirectionalLabeling::Run(
+ 			if (MemoryMonitor::Exceeded()) { log.status = BLBStatus::MemoryLimitReached; break; }
+ 			lbl_[d].time_limit = time_limit - rolex.Peek(); // Set time limit.
+ 			auto P = lbl_[d].Run(&q[d], mlb_log[d]);
++			if (correcting)
++			{
++				merge_rolex.Reset().Resume();
++				RefreshCorrectedMergeLabels(d);
++				*log.merge_time += merge_rolex.Pause();
++			}
+ 			
+ 			// If iterative-merge is enabled, then add the labels to the structure.
+ 			if (!closing_state)
+ 				for (Label* l: P)
++				{
++					if (correcting && l->duration.Empty()) continue;
+ 					insert_sorted(M[d][l->v].Insert(floor(l->q), {}), l, [] (Label* l, Label* m) { return l->min_cost < m->min_cost; });
++				}
+ 			
+ 			// If iterative-merge is enabled, then try to merge.
+ 			if (!closing_state && log.forward_log->processed_count >= merge_start)
+@@ -414,8 +434,32 @@ BLBExecutionLog BidirectionalLabeling::Run(
+ 	return log;
+ }
+ 
++void BidirectionalLabeling::RefreshCorrectedMergeLabels(int direction)
++{
++	auto& changed = lbl_[direction].corrected_merge_buckets_;
++	if (!closing_state)
++	{
++		std::sort(changed.begin(), changed.end());
++		changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
++		for (const auto& [vertex, demand] : changed)
++			for (auto& entry : M[direction][vertex])
++			{
++				if (entry.first < demand) continue;
++				if (entry.first > demand) break;
++				auto& labels = entry.second;
++				labels.erase(std::remove_if(labels.begin(), labels.end(),
++					[](Label* label) { return label->duration.Empty(); }), labels.end());
++				std::stable_sort(labels.begin(), labels.end(),
++					[](Label* a, Label* b) { return a->min_cost < b->min_cost; });
++				break;
++			}
++	}
++	changed.clear();
++}
++
+ void BidirectionalLabeling::IterativeMerge(Label* l, const MonodirectionalLabeling::DominanceStructure& L)
+ {
++	if (correcting && l->duration.Empty()) return;
+ 	TimeUnit T = vrp_.T;
+ 	for (auto& demand_entry : L[l->v])
+ 	{
+@@ -448,6 +492,7 @@ void BidirectionalLabeling::LastArcMerge(LBQueue& qf, const MonodirectionalLabel
+ 		LazyLabel ll = qf.top();
+ 		qf.pop();
+ 		Label* l = ll.parent;
++		if (correcting && l->duration.Empty()) continue;
+ 		if (pool_size() >= solution_limit) continue;
+ 		
+ 		// M13.0 trace: is this pop the merge target's frontier arc?
+@@ -494,6 +539,7 @@ void BidirectionalLabeling::LastArcMerge(LBQueue& qf, const MonodirectionalLabel
+ 
+ void BidirectionalLabeling::Merge(Label* l, Label* m)
+ {
++	if (correcting && (l->duration.Empty() || m->duration.Empty())) return;
+ 	TimeUnit T = vrp_.T;
+ 
+ 	// M13.0 trace: full arithmetic of the witness pair's merge attempt.
+diff --git a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+index 8dddf33..bb559f9 100644
+--- a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+@@ -7,6 +7,7 @@
+ #include "labeling/monodirectional_labeling.h"
+ 
+ #include <climits>
++#include <algorithm>
+ 
+ #include "labeling/pwl_domination_function.h"
+ #include "labeling/trace.h"
+@@ -205,14 +206,6 @@ vector<Label*> MonodirectionalLabeling::Run(
+ 			continue;
+ 		} // Label is dominated, ignore.
+ 		
+-		// Correct existing labels.
+-		if (correcting)
+-		{
+-			rolex2.Reset().Resume();
+-			*log->corrected_count += CorrectionStep(l);
+-			*log->correction_time += rolex2.Pause();
+-		}
+-		
+ 		// If min(rw(l)) > t_m, then l should not be extended and ll should have been preserved in the queue with the
+ 		// new makespan.
+ 		if (!cross && epsilon_bigger(min(l->rw), t_m))
+@@ -221,6 +214,14 @@ vector<Label*> MonodirectionalLabeling::Run(
+ 			delete l;
+ 			continue;
+ 		}
++
++		// Only a label retained for processing may correct stored labels.
++		if (correcting)
++		{
++			rolex2.Reset().Resume();
++			*log->corrected_count += CorrectionStep(l);
++			*log->correction_time += rolex2.Pause();
++		}
+ 		
+ 		// Otherwise, label l should be processed and extended.
+ 		// Process label.
+@@ -476,11 +477,13 @@ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ 
+ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ {
++	if (cost_check_relaxation) return 0;
+ 	int removed = 0;
+ 	for (auto it_d = U[m->v].rbegin(); it_d != U[m->v].rend(); ++it_d)
+ 	{
+ 		auto& demand_entry = *it_d;
+ 		if (epsilon_smaller(demand_entry.first, m->q)) break;
++		bool changed_cost = false;
+ 		for (int j = 0; j < demand_entry.second.size(); ++j)
+ 		{
+ 			Label* l = demand_entry.second[j];
+@@ -493,20 +496,31 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 				PWLDominationFunction Delta(l->duration);
+ 				if (partial)
+ 				{
++					const double previous_cost = l->min_cost;
+ 					Delta.DominatePieces(m->duration, theta);
+ 					l->duration = normalize_pwl((PWLFunction) Delta); // kayros (M5.7)
+ 					l->rw = l->duration.Domain();
+ 					l->min_cost = min(img(l->duration)) - l->p - l->cut_cost;
++					changed_cost |= l->min_cost != previous_cost;
+ 				}
+ 				if ((!partial && Delta.IsAlwaysDominated(m->duration, theta)) || (partial && l->duration.Empty()))
+ 				{
+ 					// If l is fully dominated, remove.
++					retired_labels_.push_back(l);
+ 					demand_entry.second.erase(demand_entry.second.begin()+j);
+ 					--j;
+ 					++removed;
+ 				}
+ 			}
+ 		}
++		if (changed_cost)
++		{
++			// Subsequent labels consult U before this batch returns.
++			if (sort_by_cost)
++				std::stable_sort(demand_entry.second.begin(), demand_entry.second.end(),
++					[&](Label* a, Label* b) { return alpha(a, partial) < alpha(b, partial); });
++			corrected_merge_buckets_.emplace_back(m->v, demand_entry.first);
++		}
+ 	}
+ 	return removed;
+ }
+@@ -552,6 +566,9 @@ void MonodirectionalLabeling::Clean()
+ 		for (auto& entry_2: entry)
+ 			for (Label* m: entry_2.second)
+ 				delete m;
++	for (Label* label: retired_labels_) delete label;
++	retired_labels_.clear();
++	corrected_merge_buckets_.clear();
+ 	U = vector<DemandLevel>(vrp_.D.NbVertices());
+ }
+ } // solver
+\ No newline at end of file
+diff --git a/tests/cpp/test_label_correction.cpp b/tests/cpp/test_label_correction.cpp
+new file mode 100644
+index 0000000..73f922b
+--- /dev/null
++++ b/tests/cpp/test_label_correction.cpp
+@@ -0,0 +1,201 @@
++#include <goc/goc.h>
++#include <nyr/nyr.h>
++
++#include <iostream>
++#include <optional>
++#include <stdexcept>
++
++#include "labeling/bidirectional_labeling.h"
++
++using namespace goc;
++using namespace nyr;
++using namespace solver;
++
++namespace solver {
++struct CorrectionInvariantTest {
++    static MonodirectionalLabeling& Mono(BidirectionalLabeling& solver) { return solver.lbl_[0]; }
++    static int Correct(MonodirectionalLabeling& solver, Label* label) { return solver.CorrectionStep(label); }
++    static bool Dominated(MonodirectionalLabeling& solver, Label* label) { return solver.DominationStep(label); }
++    static Label* Extend(MonodirectionalLabeling& solver, const LazyLabel& label) { return solver.ExtensionStep(label); }
++    static std::size_t Retired(MonodirectionalLabeling& solver) { return solver.retired_labels_.size(); }
++    static std::size_t Changes(MonodirectionalLabeling& solver) { return solver.corrected_merge_buckets_.size(); }
++    static void Refresh(BidirectionalLabeling& solver) { solver.RefreshCorrectedMergeLabels(0); }
++    static auto& Pool(BidirectionalLabeling& solver) {
++        if (solver.M[0].empty()) solver.M[0].resize(5);
++        return solver.M[0][1].Insert(1, {});
++    }
++    static std::size_t MergePool(BidirectionalLabeling& solver, Label* label) {
++        solver.pp_.P = std::vector<double>(5, 0.0);
++        solver.S.clear();
++        solver.IterativeMerge(label, solver.M[0]);
++        return solver.S.size();
++    }
++    static void Clean(BidirectionalLabeling& solver) {
++        solver.M[0].clear();
++        solver.lbl_[0].Clean();
++    }
++};
++}
++
++void require(bool condition, const char* message) {
++    if (!condition) throw std::runtime_error(message);
++}
++
++VRPInstance instance() {
++    VRPInstance vrp;
++    vrp.D = Digraph(5);
++    vrp.o = 0;
++    vrp.d = 4;
++    vrp.T = 10;
++    vrp.horizon = {0.0, 10.0};
++    vrp.Q = 100;
++    vrp.q = std::vector<double>(5, 0.0);
++    vrp.tw = std::vector<goc::Interval>(5, {0.0, 10.0});
++    vrp.tau = Matrix<PWLFunction>(5, 5);
++    vrp.pretau = Matrix<PWLFunction>(5, 5);
++    vrp.arr = Matrix<PWLFunction>(5, 5);
++    vrp.dep = Matrix<PWLFunction>(5, 5);
++    vrp.LDT = Matrix<double>(5, 5);
++    vrp.tau[0][0] = PWLFunction::ConstantFunction(0.0, {0.0, 10.0});
++    return vrp;
++}
++
++void initialize(Label& label, PWLFunction duration, VertexSet unreachable) {
++    label.parent = nullptr;
++    label.v = 1;
++    label.q = 1;
++    label.p = label.cut_cost = 0;
++    label.duration = duration;
++    label.rw = duration.Domain();
++    label.min_cost = std::min(img(duration));
++    label.U = unreachable;
++}
++
++void check(bool step_exact, bool sort_by_cost) {
++    StepExactArithmeticScope arithmetic(step_exact);
++    const std::optional<TDNGRoutesParams> ng = std::nullopt;
++    BidirectionalLabeling bidirectional(instance(), ng);
++    require(!bidirectional.correcting, "Correction must remain disabled without diagnostic opt-in");
++    bidirectional.correcting = true;
++    bidirectional.closing_state = false;
++    auto& mono = CorrectionInvariantTest::Mono(bidirectional);
++    mono.correcting = true;
++    mono.sort_by_cost = sort_by_cost;
++    VertexSet a, b;
++    a.set(1).set(2).set(4);
++    b.set(1).set(3).set(4);
++    auto* first = new Label;
++    auto* second = new Label;
++    PWLFunction rising;
++    rising.AddPiece(LinearFunction({0.0, 0.0}, {10.0, 5.0}));
++    initialize(*first, rising, a);
++    initialize(*second, PWLFunction::ConstantFunction(0.5, {0.0, 10.0}), b);
++    auto& bucket = mono.U[1].Insert(1, {});
++    bucket = {first, second};
++    CorrectionInvariantTest::Pool(bidirectional) = {first, second};
++    Label arriving;
++    initialize(arriving, PWLFunction::ConstantFunction(0.0, {0.0, 1.0}), a);
++    require(CorrectionInvariantTest::Correct(mono, &arriving) == 0, "Expected partial correction only");
++    require(first->min_cost == 1.0, "Expected partial correction to increase the minimum cost");
++    require(bucket[0] == (sort_by_cost ? second : first),
++            "Correction must repair the dominance order only when that order is enabled");
++    Label query;
++    initialize(query, PWLFunction::ConstantFunction(0.75, {0.0, 10.0}), b);
++    require(CorrectionInvariantTest::Dominated(mono, &query), "Corrected index must retain a valid dominator");
++    require(CorrectionInvariantTest::Changes(mono) == 1, "Changed merge bucket must be recorded");
++    CorrectionInvariantTest::Refresh(bidirectional);
++    require(CorrectionInvariantTest::Changes(mono) == 0, "Merge refresh must drain changed buckets");
++    require(CorrectionInvariantTest::Pool(bidirectional)[0] == second,
++            "Merge refresh must repair min-cost ordering before early breaks");
++
++    Label null_forward, start, forward, null_backward, end, middle_first, middle_second;
++    null_forward.parent = null_backward.parent = nullptr;
++    start.parent = &null_forward;
++    start.v = 0;
++    start.cut_cost = 0;
++    initialize(forward, PWLFunction::ConstantFunction(0.0, {0.0, 10.0}), {});
++    forward.parent = &start;
++    forward.p = 0.75;
++    forward.min_cost = -0.75;
++    forward.S.set(0).set(1);
++    end.parent = &null_backward;
++    end.v = 4;
++    middle_first.parent = middle_second.parent = &end;
++    middle_first.v = 2;
++    middle_second.v = 3;
++    first->parent = &middle_first;
++    second->parent = &middle_second;
++    first->S = a;
++    second->S = b;
++    require(CorrectionInvariantTest::MergePool(bidirectional, &forward) == 1,
++            "Repaired merge index must retain the negative-cost route");
++    CorrectionInvariantTest::Clean(bidirectional);
++
++    for (bool partial : {true, false}) {
++        mono.partial = partial;
++        auto* retired = new Label;
++        initialize(*retired, PWLFunction::ConstantFunction(1.0, {0.0, 10.0}), a);
++        mono.U[1].Insert(1, {}).push_back(retired);
++        CorrectionInvariantTest::Pool(bidirectional) = {retired};
++        initialize(arriving, PWLFunction::ConstantFunction(0.0, {0.0, 10.0}), a);
++        require(CorrectionInvariantTest::Correct(mono, &arriving) == 1, "Expected full correction");
++        require(CorrectionInvariantTest::Retired(mono) == 1, "Removed parent must retain ownership until cleanup");
++        if (partial) {
++            require(retired->duration.Empty(), "Fully corrected duration must be empty");
++            LazyLabel child{retired, 2, 0.0};
++            require(CorrectionInvariantTest::Extend(mono, child) == nullptr,
++                    "Lazy child must safely reject its live empty parent");
++            CorrectionInvariantTest::Refresh(bidirectional);
++            require(CorrectionInvariantTest::Pool(bidirectional).empty(),
++                    "Merge index must remove empty corrected labels");
++            require(CorrectionInvariantTest::MergePool(bidirectional, retired) == 0,
++                    "Empty forward merge label must be ignored");
++        } else {
++            require(!retired->duration.Empty(), "Full-only correction must preserve its existing valid duration semantics");
++        }
++        CorrectionInvariantTest::Clean(bidirectional);
++        require(CorrectionInvariantTest::Retired(mono) == 0, "Cleanup must release retired owners");
++    }
++
++    // A newly extended label can move beyond the current middle after pruning.
++    // Such a label is requeued, so it must not retire the current stored label.
++    mono.partial = true;
++    mono.cross = false;
++    mono.lazy_extension = false;
++    mono.t_m = 5.0;
++    auto* existing = new Label;
++    initialize(*existing, PWLFunction::ConstantFunction(1.0, {8.0, 10.0}), a);
++    mono.U[1].Insert(1, {}).push_back(existing);
++    Label parent;
++    initialize(parent, PWLFunction::ConstantFunction(0.0, {0.0, 10.0}), {});
++    parent.v = 0;
++    parent.q = 0;
++    parent.length = 0;
++    auto* beyond_middle = new Label;
++    initialize(*beyond_middle, PWLFunction::ConstantFunction(0.0, {8.0, 10.0}), a);
++    beyond_middle->parent = &parent;
++    beyond_middle->length = 1;
++    LazyLabel lazy{&parent, 1, 0.0};
++    lazy.extension = beyond_middle;
++    LBQueue queue;
++    queue.push(lazy);
++    MLBExecutionLog log(true);
++    const auto processed = mono.Run(&queue, &log);
++    require(processed.empty() && !queue.empty() && queue.top().makespan == 8.0,
++            "Boundary-crossing candidate must be deferred");
++    require(CorrectionInvariantTest::Retired(mono) == 0 && !existing->duration.Empty(),
++            "A deferred candidate must not retire a stored label");
++    CorrectionInvariantTest::Clean(bidirectional);
++}
++
++int main() {
++    try {
++        for (bool arithmetic : {false, true})
++            for (bool sorting : {false, true}) check(arithmetic, sorting);
++        std::cout << "Correction ordering, negative-route retention, ownership and deferred-label checks pass in both arithmetic modes and sorting settings\n";
++        return 0;
++    } catch (const std::exception& error) {
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++}
+diff --git a/tests/cpp/test_label_correction_pricing.cpp b/tests/cpp/test_label_correction_pricing.cpp
+new file mode 100644
+index 0000000..fbce6ff
+--- /dev/null
++++ b/tests/cpp/test_label_correction_pricing.cpp
+@@ -0,0 +1,155 @@
++#include <goc/goc.h>
++#include <nyr/nyr.h>
++
++#include <cmath>
++#include <functional>
++#include <iostream>
++#include <optional>
++#include <stdexcept>
++
++#include "labeling/bidirectional_labeling.h"
++
++using namespace goc;
++using namespace nyr;
++using namespace solver;
++
++void require(bool condition, const char* message) {
++    if (!condition) throw std::runtime_error(message);
++}
++
++double cost(int u, int v, int seed) {
++    return (u == 0 || v == 5) ? 1.0 : 1.0 + ((u * 7 + v * 3 + seed) % 4) / 4.0;
++}
++
++VRPInstance instance(int seed) {
++    VRPInstance vrp;
++    vrp.D = Digraph(6);
++    vrp.o = 0;
++    vrp.d = 5;
++    vrp.T = 20.0;
++    vrp.horizon = {0.0, vrp.T};
++    vrp.Q = 3.0;
++    vrp.q = {0.0, 1.0, 1.0, 1.0, 1.0, 0.0};
++    vrp.tw = std::vector<goc::Interval>(6, vrp.horizon);
++    vrp.time_steps = {vrp.horizon};
++    vrp.tau = vrp.pretau = vrp.arr = vrp.dep = Matrix<PWLFunction>(6, 6);
++    vrp.LDT = Matrix<double>(6, 6, -goc::INFTY);
++    for (int u = 0; u < 6; ++u) {
++        vrp.tau[u][u] = vrp.pretau[u][u] = PWLFunction::ConstantFunction(0.0, vrp.horizon);
++        vrp.arr[u][u] = vrp.dep[u][u] = PWLFunction::IdentityFunction(vrp.horizon);
++        vrp.LDT[u][u] = vrp.T;
++        for (int v = 0; v < 6; ++v) {
++            if (u == v || u == vrp.d || v == vrp.o) continue;
++            vrp.D.AddArc({u, v});
++            const double travel = cost(u, v, seed);
++            vrp.tau[u][v] = PWLFunction::ConstantFunction(travel, {0.0, vrp.T - travel});
++            vrp.arr[u][v].AddPiece(LinearFunction({0.0, travel}, {vrp.T - travel, vrp.T}));
++            vrp.dep[u][v].AddPiece(LinearFunction({travel, 0.0}, {vrp.T, vrp.T - travel}));
++            vrp.pretau[u][v] = PWLFunction::ConstantFunction(travel, {travel, vrp.T});
++            vrp.LDT[u][v] = vrp.T - travel;
++        }
++    }
++    return vrp;
++}
++
++double route_reduced_cost(const GraphPath& path, const PricingProblem& problem, int seed) {
++    require(path.size() >= 3 && path.front() == 0 && path.back() == 5,
++            "Pricing returned an invalid depot path");
++    unsigned visited = 0;
++    double value = 0.0;
++    int cut_visits = 0;
++    for (std::size_t k = 1; k < path.size(); ++k) {
++        const int u = path[k - 1], v = path[k];
++        require(!(u == 1 && v == 2), "Pricing returned a forbidden arc");
++        value += cost(u, v, seed);
++        if (v == 5) continue;
++        require(v >= 1 && v <= 4 && !(visited & (1U << v)), "Pricing returned a nonelementary path");
++        visited |= 1U << v;
++        value -= problem.P[v];
++        if (v <= 3) ++cut_visits;
++    }
++    require(path.size() - 2 <= 3, "Pricing exceeded capacity");
++    if (cut_visits >= 2) value -= problem.sigma[0];
++    return value;
++}
++
++double oracle(const PricingProblem& problem, int seed) {
++    double best = goc::INFTY;
++    GraphPath path{0};
++    std::function<void(unsigned)> visit = [&](unsigned used) {
++        if (path.size() > 1) {
++            path.push_back(5);
++            best = std::min(best, route_reduced_cost(path, problem, seed));
++            path.pop_back();
++        }
++        if (path.size() == 4) return;
++        for (int v = 1; v <= 4; ++v) {
++            if ((used & (1U << v)) || (path.back() == 1 && v == 2)) continue;
++            path.push_back(v);
++            visit(used | (1U << v));
++            path.pop_back();
++        }
++    };
++    visit(0);
++    return best;
++}
++
++int main() {
++    try {
++        int calls = 0;
++        long long corrected = 0;
++        for (bool arithmetic : {false, true}) {
++            StepExactArithmeticScope scope(arithmetic);
++            for (int seed : {0, 1}) {
++                const auto vrp = instance(seed);
++                for (bool correction : {false, true})
++                    for (bool partial : {false, true})
++                        for (bool closing : {false, true})
++                            for (bool sorting : {false, true}) {
++                                const std::optional<TDNGRoutesParams> ng = std::nullopt;
++                                BidirectionalLabeling labeling(vrp, ng);
++                                labeling.correcting = correction;
++                                labeling.partial = partial;
++                                labeling.closing_state = closing;
++                                labeling.sort_by_cost = sorting;
++                                for (bool negative : {true, false}) {
++                                    PricingProblem problem;
++                                    problem.A = {{1, 2}};
++                                    problem.P = negative ? std::vector<double>{0.0, 2.5, 2.75, 2.25, 3.0, 0.0}
++                                                         : std::vector<double>(6, 0.0);
++                                    SubsetRowCut cut;
++                                    cut.set(1).set(2).set(3);
++                                    problem.S = {cut};
++                                    problem.sigma = {-0.5};
++                                    const double expected = oracle(problem, seed);
++                                    std::vector<goc::Route> routes;
++                                    const auto log = labeling.Run(problem, &routes, LabelingLevel::Exact);
++                                    require(log.status == BLBStatus::Finished, "Tiny exact pricing must complete");
++                                    double observed = goc::INFTY;
++                                    for (const auto& route : routes) {
++                                        const double reduced = route_reduced_cost(route.path, problem, seed);
++                                        double duration = 0.0;
++                                        for (std::size_t k = 1; k < route.path.size(); ++k)
++                                            duration += cost(route.path[k-1], route.path[k], seed);
++                                        require(std::abs(route.duration - duration) < 1e-9,
++                                                "Returned duration differs from independent constant-arc sum");
++                                        require(reduced < -1e-6, "Pricing returned a nonnegative reduced-cost route");
++                                        observed = std::min(observed, reduced);
++                                    }
++                                    if (expected < -1e-6)
++                                        require(std::abs(observed - expected) < 1e-9,
++                                                "Exact pricing lost the exhaustive oracle's best negative route");
++                                    else require(routes.empty(), "Nonnegative pricing oracle requires an empty pool");
++                                    corrected += *log.forward_log->corrected_count + *log.backward_log->corrected_count;
++                                    ++calls;
++                                }
++                            }
++            }
++        }
++        std::cout << calls << " synthetic exact-pricing oracle checks pass, corrected count " << corrected << '\n';
++        return 0;
++    } catch (const std::exception& error) {
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++}
