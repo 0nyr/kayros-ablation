@@ -256,7 +256,7 @@
       "patch": "patches/ms58-experimental/warm-incumbent-only-incremental.patch",
       "sha256": "7020472cbb97f40b8500276b0694daad8691053d02a41baa4720025b11c24a35",
       "purpose": "Warm incumbent-only handoff candidate.",
-      "qualification": "Local 7-unit checks and Astra review passed. Runtime evaluation pending.",
+      "qualification": "Short 20-cell fixed-witness and final 15-cell C104 panels completed. Mixed short-case results. On selected C104, warm and dedup close 3/3, UB-only and cold 0/3. No global UB-only recommendation.",
       "source_verification": {
         "patch_matches_exact_commit_diff": true
       }
@@ -269,7 +269,7 @@
       "patch": "patches/ms58-experimental/warm-dedup-incremental.patch",
       "sha256": "f5425cf8f846d4e968a89bc2cf1754ee87247f9f1a25839988c950e5bd6fc600",
       "purpose": "Warm-column deduplication candidate.",
-      "qualification": "Local 7-unit checks and Astra review passed. Runtime evaluation pending.",
+      "qualification": "Short 20-cell fixed-witness and final 15-cell C104 panels completed. Mixed short-case results. On selected C104, warm and dedup close 3/3, UB-only and cold 0/3. No global UB-only recommendation.",
       "source_verification": {
         "patch_matches_exact_commit_diff": true
       }
@@ -323,13 +323,45 @@
       "base": "a2dcf8870c17e7edeccb472b27bee0e544eec997",
       "commit": "7d68859e8d6d8b8ae2382c1f7a88088709f099b1",
       "purpose": "U-opportunity instrumentation.",
-      "qualification": "Ten Grid 5000 native checks passed. Six-cell routing pilot launched. No production pruning or timing claim.",
+      "qualification": "All 6 pilot observations complete, with no audit failures. RC201 completed work matches 9d. Final correction-block opportunity is about 79% of sampled C104 tests. Instrumentation only, no pruning or speed claim.",
       "runtime_identity": {
         "core_sha256_prefix": "b527271e",
         "lera_sha256": "06069acead992aedb7cfc44801240bb5d737eb8c4fa045e923ca18c191f95f44"
       },
       "schedule_sha256": "f70d1ceca410eaeac78ebf9dec2aa3c1fa2e444f0b116812bf5fda117f5ffcc8"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-packed-ordinary-filter",
+      "base": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+      "commit": "a6b7c09e847e1b89c0aef6d5ac268ff0df0e88be",
+      "branch": "proof-speed/packed-ordinary-filter",
+      "patch": "patches/ms58-experimental/packed-ordinary-filter-shutdown.patch",
+      "sha256": "893841913482c0321e94d0a2393fdfed6883b9966ba60827e75b9cf18fb390c7",
+      "purpose": "Packed ordinary dominance filter",
+      "qualification": "WIP. Library builds and OFF identity checks pass. Native fixture does not compile because min is unqualified at line 76. Semantic assertions and actual source review pending."
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-correction-u-blocks",
+      "base": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+      "commit": "64082870567adc3c4534e4aaa0bb03171431469d",
+      "branch": "proof-speed/correction-u-blocks",
+      "patch": "patches/ms58-experimental/correction-u-blocks-shutdown.patch",
+      "sha256": "189191e03b82202d43d80b0b3d08356a86ce381a1f13ca789acb7d007b35d964",
+      "purpose": "Conservative correction U blocks",
+      "qualification": "WIP. No completed build/tests. Resolve insertion iterator ordering and empty metadata insertion before validation."
+    },
+    {
+      "worktree": "$WORKSPACE/lera-proof-compose-terminal-diagnostic",
+      "base": "f2c9e205bd1ecc9afb45d5efe7fcb0df881f2b33",
+      "commit": "53b93a31f2eccb81a1390ee4f7a4ec09afb805b4",
+      "branch": "proof-speed/f2-compose-terminal-diagnostic",
+      "patch": "patches/ms58-experimental/f2-compose-terminal-diagnostic-shutdown.patch",
+      "sha256": "e2ed396032cdb1dc2a40f5cff710967081ace7fcecb3812825f63c2346cde512",
+      "purpose": "f2 checked composition and terminal capture",
+      "qualification": "21 synthetic gates, local build and Astra source review pass. No bp execution, remote build, routing harness or replay."
     }
   ],
-  "point_addition_comment_only_followup": "ea6097e"
+  "point_addition_comment_only_followup": "ea6097e",
+  "shutdown_date": "2026-11-10",
+  "tested_commits_immutable": true
 }

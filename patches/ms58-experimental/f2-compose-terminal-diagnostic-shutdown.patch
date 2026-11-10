@@ -1,0 +1,1084 @@
+diff --git a/code/CMakeLists.txt b/code/CMakeLists.txt
+index ecf970a..42a903d 100644
+--- a/code/CMakeLists.txt
++++ b/code/CMakeLists.txt
+@@ -19,7 +19,7 @@ add_subdirectory(goc)
+ include_directories(goc/include)
+ 
+ # Create library with source codes.
+-add_library(networks2019 src/vrp_instance.cpp src/preprocess/preprocess_capacity.cpp src/preprocess/preprocess_time_windows.cpp src/preprocess/preprocess_service_waiting.cpp src/preprocess/preprocess_travel_times.cpp src/labeling/label.cpp src/labeling/monodirectional_labeling.cpp src/labeling/lazy_label.cpp src/labeling/pwl_domination_function.cpp src/labeling/bidirectional_labeling.cpp src/preprocess/preprocess_triangle_depot.cpp src/bcp/pricing_problem.cpp src/bcp/spf.cpp src/bcp/bcp.cpp)
++add_library(networks2019 src/diagnostic_capture.cpp src/vrp_instance.cpp src/preprocess/preprocess_capacity.cpp src/preprocess/preprocess_time_windows.cpp src/preprocess/preprocess_service_waiting.cpp src/preprocess/preprocess_travel_times.cpp src/labeling/label.cpp src/labeling/monodirectional_labeling.cpp src/labeling/lazy_label.cpp src/labeling/pwl_domination_function.cpp src/labeling/bidirectional_labeling.cpp src/preprocess/preprocess_triangle_depot.cpp src/bcp/pricing_problem.cpp src/bcp/spf.cpp src/bcp/bcp.cpp)
+ target_link_libraries(networks2019 goc)
+ 
+ # Create binaries.
+diff --git a/code/goc/CMakeLists.txt b/code/goc/CMakeLists.txt
+index bfe2562..7038d1b 100644
+--- a/code/goc/CMakeLists.txt
++++ b/code/goc/CMakeLists.txt
+@@ -20,7 +20,7 @@ endif()
+ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -std=c++14")
+ 
+ include_directories(include)
+-add_library(goc src/collection/collection_utils.cpp src/graph/arc.cpp src/graph/digraph.cpp src/math/interval.cpp src/math/linear_function.cpp src/linear_programming/model/variable.cpp src/linear_programming/model/expression.cpp src/linear_programming/model/constraint.cpp src/linear_programming/cplex/cplex_formulation.cpp src/linear_programming/model/valuation.cpp src/time/duration.cpp src/time/stopwatch.cpp src/time/watch.cpp src/time/date.cpp src/time/point_in_time.cpp src/print/string_utils.cpp src/runner/runner_utils.cpp src/json/json_utils.cpp src/print/printable.cpp src/linear_programming/cplex/cplex_solver.cpp src/log/lp_execution_log.cpp src/log/bcp_execution_log.cpp src/linear_programming/cplex/cplex_wrapper.cpp src/linear_programming/solver/lp_solver.cpp src/linear_programming/solver/bc_solver.cpp src/linear_programming/cuts/separation_algorithm.cpp src/log/mlb_execution_log.cpp src/log/blb_execution_log.cpp src/linear_programming/colgen/colgen.cpp src/log/cg_execution_log.cpp src/linear_programming/solver/cg_solver.cpp src/graph/path_finding.cpp src/graph/graph_path.cpp src/print/table_stream.cpp src/graph/maxflow_mincut.cpp src/linear_programming/cuts/separation_strategy.cpp src/math/pwl_function.cpp src/log/log.cpp src/log/bc_execution_log.cpp src/math/point_2d.cpp src/graph/edge.cpp src/graph/graph.cpp src/vrp/route.cpp src/vrp/vrp_solution.cpp)
++add_library(goc src/collection/collection_utils.cpp src/graph/arc.cpp src/graph/digraph.cpp src/math/interval.cpp src/math/linear_function.cpp src/linear_programming/model/variable.cpp src/linear_programming/model/expression.cpp src/linear_programming/model/constraint.cpp src/linear_programming/cplex/cplex_formulation.cpp src/linear_programming/model/valuation.cpp src/time/duration.cpp src/time/stopwatch.cpp src/time/watch.cpp src/time/date.cpp src/time/point_in_time.cpp src/print/string_utils.cpp src/runner/runner_utils.cpp src/json/json_utils.cpp src/print/printable.cpp src/linear_programming/cplex/cplex_solver.cpp src/log/lp_execution_log.cpp src/log/bcp_execution_log.cpp src/linear_programming/cplex/cplex_wrapper.cpp src/linear_programming/solver/lp_solver.cpp src/linear_programming/solver/bc_solver.cpp src/linear_programming/cuts/separation_algorithm.cpp src/log/mlb_execution_log.cpp src/log/blb_execution_log.cpp src/linear_programming/colgen/colgen.cpp src/log/cg_execution_log.cpp src/linear_programming/solver/cg_solver.cpp src/graph/path_finding.cpp src/graph/graph_path.cpp src/print/table_stream.cpp src/graph/maxflow_mincut.cpp src/linear_programming/cuts/separation_strategy.cpp src/math/pwl_function.cpp src/math/pwl_diagnostic.cpp src/math/diagnostic_input.cpp src/log/log.cpp src/log/bc_execution_log.cpp src/math/point_2d.cpp src/graph/edge.cpp src/graph/graph.cpp src/vrp/route.cpp src/vrp/vrp_solution.cpp)
+ 
+ include_directories($ENV{CPLEX_INCLUDE})
+ include_directories($ENV{BOOST_INCLUDE})
+diff --git a/code/goc/include/goc/math/pwl_diagnostic.h b/code/goc/include/goc/math/pwl_diagnostic.h
+new file mode 100644
+index 0000000..92de508
+--- /dev/null
++++ b/code/goc/include/goc/math/pwl_diagnostic.h
+@@ -0,0 +1,29 @@
++#ifndef GOC_PWL_DIAGNOSTIC_H
++#define GOC_PWL_DIAGNOSTIC_H
++#include <cstdint>
++#include <exception>
++#include "goc/math/pwl_function.h"
++namespace goc { namespace pwl_diag {
++struct Error : std::exception {
++    int code;
++    const char* reason;
++    Error(int code, const char* reason) : code(code), reason(reason) {}
++    const char* what() const noexcept override { return reason; }
++};
++struct Context { int phase; std::uint64_t call, generation; };
++Context& context();
++std::uint64_t bits(double value);
++nlohmann::json function_record(const PWLFunction& f);
++nlohmann::json identity_record();
++void write_exclusive(const nlohmann::json& record);
++void require_bindings();
++std::string sha256_bytes(const std::string& bytes);
++nlohmann::json deferred_original_input();
++[[noreturn]] void stop(const char* reason);
++[[noreturn]] void invalid_compose(const PWLFunction& f, const PWLFunction& g, int i, int j, const char* site);
++inline const LinearFunction& checked_piece(const PWLFunction& f, const PWLFunction& g, int i, int j, const char* site) {
++    if (i < 0 || i >= f.PieceCount()) invalid_compose(f, g, i, j, site);
++    return f[i];
++}
++}}
++#endif
+diff --git a/code/goc/src/math/diagnostic_input.cpp b/code/goc/src/math/diagnostic_input.cpp
+new file mode 100644
+index 0000000..55f8a73
+--- /dev/null
++++ b/code/goc/src/math/diagnostic_input.cpp
+@@ -0,0 +1,48 @@
++#include "goc/math/pwl_diagnostic.h"
++#include <cstdlib>
++#include <fstream>
++#include <iterator>
++#include <vector>
++namespace goc { namespace pwl_diag {
++std::string sha256_bytes(const std::string& input) {
++    static const std::uint32_t k[64]={
++        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
++        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
++        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
++        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
++        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
++        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
++        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
++        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
++    auto rotate=[](std::uint32_t x,int n){return (x>>n)|(x<<(32-n));};
++    std::vector<unsigned char> data(input.begin(),input.end());
++    const std::uint64_t length=static_cast<std::uint64_t>(data.size())*8;
++    data.push_back(0x80);while(data.size()%64!=56)data.push_back(0);
++    for(int i=7;i>=0;--i)data.push_back(static_cast<unsigned char>(length>>(8*i)));
++    std::uint32_t h[8]={0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
++    for(std::size_t offset=0;offset<data.size();offset+=64) {
++        std::uint32_t w[64];
++        for(int i=0;i<16;++i)w[i]=(std::uint32_t(data[offset+4*i])<<24)|(std::uint32_t(data[offset+4*i+1])<<16)|
++            (std::uint32_t(data[offset+4*i+2])<<8)|data[offset+4*i+3];
++        for(int i=16;i<64;++i) {auto s0=rotate(w[i-15],7)^rotate(w[i-15],18)^(w[i-15]>>3);auto s1=rotate(w[i-2],17)^rotate(w[i-2],19)^(w[i-2]>>10);w[i]=w[i-16]+s0+w[i-7]+s1;}
++        auto a=h[0],b=h[1],c=h[2],d=h[3],e=h[4],f=h[5],g=h[6],z=h[7];
++        for(int i=0;i<64;++i) {auto s1=rotate(e,6)^rotate(e,11)^rotate(e,25);auto ch=(e&f)^(~e&g);
++            auto t1=z+s1+ch+k[i]+w[i];auto s0=rotate(a,2)^rotate(a,13)^rotate(a,22);auto maj=(a&b)^(a&c)^(b&c);auto t2=s0+maj;
++            z=g;g=f;f=e;e=d+t1;d=c;c=b;b=a;a=t1+t2;}
++        h[0]+=a;h[1]+=b;h[2]+=c;h[3]+=d;h[4]+=e;h[5]+=f;h[6]+=g;h[7]+=z;
++    }
++    static const char* hex="0123456789abcdef";std::string result;result.reserve(64);
++    for(auto word:h)for(int i=7;i>=0;--i)result.push_back(hex[(word>>(i*4))&15]);
++    return result;
++}
++nlohmann::json deferred_original_input() {
++    if(context().phase!=4) stop("original_input_reload_before_bcp_return");
++    const char* path=std::getenv("MS58_DIAGNOSTIC_NATIVE_INPUT_PATH");
++    const char* expected=std::getenv("UPSTREAM_NATIVE_INPUT_SHA256");
++    if(!path||!expected)stop("native_input_binding_missing");
++    std::ifstream file(path,std::ios::binary);if(!file)stop("native_input_reload_failed");
++    const std::string bytes((std::istreambuf_iterator<char>(file)),std::istreambuf_iterator<char>());
++    if(file.bad()||sha256_bytes(bytes)!=expected)stop("native_input_sha256_mismatch");
++    return nlohmann::json::parse(bytes);
++}
++}}
+diff --git a/code/goc/src/math/pwl_diagnostic.cpp b/code/goc/src/math/pwl_diagnostic.cpp
+new file mode 100644
+index 0000000..44f934f
+--- /dev/null
++++ b/code/goc/src/math/pwl_diagnostic.cpp
+@@ -0,0 +1,70 @@
++#include "goc/math/pwl_diagnostic.h"
++#include <cerrno>
++#include <cstdlib>
++#include <cstring>
++#include <fcntl.h>
++#include <fstream>
++#include <iterator>
++#include <vector>
++#include <unistd.h>
++namespace goc { namespace pwl_diag {
++Context& context() { static Context value{}; return value; }
++std::uint64_t bits(double value) { std::uint64_t result; static_assert(sizeof(result)==sizeof(value), "binary64 required"); std::memcpy(&result, &value, sizeof(value)); return result; }
++nlohmann::json function_record(const PWLFunction& f) {
++    auto interval = [](const Interval& x) { return nlohmann::json::array({bits(x.left), bits(x.right)}); };
++    nlohmann::json pieces = nlohmann::json::array();
++    for (const auto& p : f.Pieces()) pieces.push_back({{"domain_bits", interval(p.domain)}, {"image_bits", interval(p.image)},
++        {"slope_bits", bits(p.slope)}, {"intercept_bits", bits(p.intercept)}});
++    return {{"encoding", "f2-legacy-scalar-binary64-uint64"}, {"cached_domain_bits", interval(f.Domain())},
++            {"cached_image_bits", interval(f.Image())}, {"piece_count", f.PieceCount()}, {"pieces", pieces}};
++}
++nlohmann::json identity_record() {
++    nlohmann::json identity = {{"base_source", "f2c9e205bd1ecc9afb45d5efe7fcb0df881f2b33"}};
++    for (const char* key : {"PROBE_MANIFEST_HASH", "PROBE_RUN_ID", "UPSTREAM_NATIVE_INPUT_SHA256", "MS58_DIAGNOSTIC_RAW_INPUT_SHA256", "MS58_DIAGNOSTIC_SOURCE_INVENTORY_SHA256"}) {
++        const char* value = std::getenv(key); identity[key] = value ? nlohmann::json(value) : nlohmann::json(nullptr);
++    }
++    const char* path=std::getenv("MS58_DIAGNOSTIC_NATIVE_INPUT_PATH");
++    identity["MS58_DIAGNOSTIC_NATIVE_INPUT_PATH"]=path?nlohmann::json(path):nlohmann::json(nullptr);
++    return identity;
++}
++void write_exclusive(const nlohmann::json& record) {
++    const char* path = std::getenv("MS58_DIAGNOSTIC_CAPTURE_PATH");
++    if (!path || !*path) throw Error(87, "capture_path_missing");
++    const std::string body = "{\"record\":" + record.dump() + ",\"complete\":true}\n";
++    const int fd = ::open(path, O_CREAT | O_EXCL | O_WRONLY, 0600);
++    if (fd < 0) throw Error(87, "exclusive_capture_open_failed");
++    std::size_t offset = 0;
++    while (offset < body.size()) {
++        const auto count = ::write(fd, body.data()+offset, body.size()-offset);
++        if (count < 0 && errno == EINTR) continue;
++        if (count <= 0) { ::close(fd); throw Error(87, "capture_write_failed"); }
++        offset += static_cast<std::size_t>(count);
++    }
++    const bool flushed = ::fsync(fd) == 0;
++    const bool closed = ::close(fd) == 0;
++    if (!flushed || !closed) throw Error(87, "capture_flush_failed");
++}
++void require_bindings() {
++    for (const char* key : {"PROBE_MANIFEST_HASH", "PROBE_RUN_ID", "UPSTREAM_NATIVE_INPUT_SHA256", "MS58_DIAGNOSTIC_RAW_INPUT_SHA256", "MS58_DIAGNOSTIC_SOURCE_INVENTORY_SHA256"}) {
++        const char* value = std::getenv(key);
++        if (!value || std::strlen(value)!=64) throw Error(87, "identity_binding_missing");
++        for (const char* p=value; *p; ++p) if (!((*p>='0'&&*p<='9')||(*p>='a'&&*p<='f'))) throw Error(87, "identity_binding_invalid");
++    }
++    if (!std::getenv("MS58_DIAGNOSTIC_NATIVE_INPUT_PATH")) throw Error(87, "native_input_path_missing");
++    if (!std::getenv("MS58_DIAGNOSTIC_CAPTURE_PATH")) throw Error(87, "capture_path_missing");
++}
++[[noreturn]] void stop(const char* reason) {
++    write_exclusive({{"schema", "ms58-f2-terminal-pricing/v1"}, {"kind", "capture_failure"},
++        {"reason", reason}, {"identity", identity_record()}, {"phase", context().phase},
++        {"call_ordinal", context().call}, {"callback_generation", context().generation}});
++    throw Error(87, reason);
++}
++[[noreturn]] void invalid_compose(const PWLFunction& f, const PWLFunction& g, int i, int j, const char* site) {
++    write_exclusive({{"schema", "ms58-f2-terminal-pricing/v1"}, {"kind", "invalid_compose"},
++        {"site", site}, {"outer_index", i}, {"inner_piece_index", j}, {"outer_piece_count", f.PieceCount()},
++        {"inner_piece_count", g.PieceCount()}, {"outer", function_record(f)}, {"inner", function_record(g)},
++        {"identity", identity_record()}, {"phase", context().phase}, {"call_ordinal", context().call},
++        {"callback_generation", context().generation}});
++    throw Error(86, "invalid_compose_index");
++}
++}}
+diff --git a/code/goc/src/math/pwl_function.cpp b/code/goc/src/math/pwl_function.cpp
+index 3fe6196..c7ff3a5 100644
+--- a/code/goc/src/math/pwl_function.cpp
++++ b/code/goc/src/math/pwl_function.cpp
+@@ -5,6 +5,7 @@
+ //
+ 
+ #include "goc/math/pwl_function.h"
++#include "goc/math/pwl_diagnostic.h"
+ 
+ #include "goc/exception/exception_utils.h"
+ #include "goc/string/string_utils.h"
+@@ -208,7 +209,7 @@ PWLFunction PWLFunction::Compose(const PWLFunction& g) const
+ 			
+ 			// Find (unique) piece f[i] with img(g[j]) \subseteq dom(f[i]) if exists.
+ 			while (i < f.PieceCount() && epsilon_smaller(max(dom(f[i])), y)) ++i;
+-			while (i >= 0 && epsilon_bigger(min(dom(f[i])), y)) --i;
++			while (i >= 0 && epsilon_bigger(min(dom(pwl_diag::checked_piece(f, g, i, j, "constant_descending_search"))), y)) --i;
+ 			
+ 			// If found f[i] such that dom(f[i]) \cap img(g[j]) \neq \emptyset, add the piece to fog.
+ 			if (i >= 0 && i < f.PieceCount() && dom(f[i]).Includes(y))
+@@ -235,7 +236,7 @@ PWLFunction PWLFunction::Compose(const PWLFunction& g) const
+ 		{
+ 			// Find last piece f[i] such that min(dom(f[i])) <= max(img(g[j])).
+ 			while (i < f.PieceCount()-1 && epsilon_smaller_equal(min(dom(f[i+1])), max(img(g[j])))) ++i;
+-			while (i >= 0 && epsilon_bigger(min(dom(f[i])), max(img(g[j])))) --i;
++			while (i >= 0 && epsilon_bigger(min(dom(pwl_diag::checked_piece(f, g, i, j, "decreasing_descending_search"))), max(img(g[j])))) --i;
+ 			
+ 			// For each piece f[i] such that dom(f[i]) \cap img(g[j]) \neq \emptyset
+ 			for (; i >= 0 && dom(f[i]).Intersects(img(g[j])); --i)
+diff --git a/code/include/bcp/bcp.h b/code/include/bcp/bcp.h
+index 9bf1531..babd2a2 100644
+--- a/code/include/bcp/bcp.h
++++ b/code/include/bcp/bcp.h
+@@ -20,6 +20,7 @@ typedef std::function<void(const PricingProblem& pricing_problem, int node_numbe
+ class BCP
+ {
+ public:
++    int DiagnosticNodeCount() const { return node_seq; }
+ 	goc::Duration time_limit;
+ 	int node_limit;
+ 	int cut_limit;
+diff --git a/code/include/diagnostic_capture.h b/code/include/diagnostic_capture.h
+new file mode 100644
+index 0000000..e190ffe
+--- /dev/null
++++ b/code/include/diagnostic_capture.h
+@@ -0,0 +1,74 @@
++#ifndef MS58_DIAGNOSTIC_CAPTURE_H
++#define MS58_DIAGNOSTIC_CAPTURE_H
++#include <cstddef>
++#include <cstdint>
++#include <type_traits>
++#include <vector>
++#include <bitset>
++#include "goc/math/pwl_diagnostic.h"
++namespace networks2019 {
++constexpr int DiagnosticMaxVertices = 102;
++constexpr int DiagnosticMaxCuts = 500;
++struct DiagnosticEntry {
++    std::uint64_t call_ordinal, callback_generation;
++    int level, merge_start, solution_limit, process_limit[2], returned_status;
++    bool closing_state, partial, relax_elementary_check, relax_cost_check;
++    bool limited_extension, lazy_extension, unreachable_strengthened, sort_by_cost, correcting, symmetric;
++    bool cross[2], returned, finished;
++    std::size_t route_count, source_iteration_index, pool_bucket_count;
++    double time_budget_seconds, time_budget_milliseconds, callback_budget_milliseconds, initial_middle[2], pool_max_load_factor;
++};
++struct DiagnosticRaw {
++    std::uint64_t generation;
++    int vertex_count, cut_count, row_count, node_count;
++    std::size_t length;
++    double duals[DiagnosticMaxVertices + DiagnosticMaxCuts];
++};
++struct DiagnosticCapture {
++    DiagnosticRaw raw{};
++    DiagnosticEntry entry{};
++    std::uint64_t call_count = 0;
++    void snapshot_raw(const double* values, std::size_t count, int vertices, int cuts, int rows, int nodes) {
++        if (vertices < 2 || vertices > DiagnosticMaxVertices || cuts < 0 || cuts > DiagnosticMaxCuts ||
++            count != static_cast<std::size_t>(vertices+cuts) || rows != vertices+cuts)
++            goc::pwl_diag::stop("raw_dual_snapshot_bounds_or_rows");
++        ++raw.generation;
++        raw.vertex_count=vertices; raw.cut_count=cuts; raw.row_count=rows; raw.node_count=nodes; raw.length=count;
++        for (std::size_t i=0; i<count; ++i) raw.duals[i]=values[i];
++        goc::pwl_diag::context().generation=raw.generation;
++    }
++    void enter(DiagnosticEntry value) {
++        value.call_ordinal=++call_count; value.callback_generation=raw.generation; value.returned=false;
++        value.finished=false; value.route_count=0; entry=value;
++        goc::pwl_diag::context()={3, entry.call_ordinal, raw.generation};
++    }
++    void leave(int status, bool finished, std::size_t count) {
++        entry.returned_status=status; entry.finished=finished; entry.route_count=count; entry.returned=true;
++    }
++    const char* eligibility(bool bcp_returned, bool root_optimum, int nodes, bool forbidden_empty) const {
++        if (!bcp_returned) return "bcp_has_not_returned";
++        if (!root_optimum || nodes!=1 || raw.node_count!=1) return "not_completed_root_only";
++        if (!forbidden_empty) return "forbidden_arcs_present";
++        if (!entry.returned || entry.level!=2 || !entry.finished || entry.route_count!=0) return "last_call_not_exact_finished_empty";
++        if (entry.callback_generation!=raw.generation) return "raw_dual_generation_mismatch";
++        return nullptr;
++    }
++};
++static_assert(std::is_trivially_copyable<DiagnosticEntry>::value, "POD entry required");
++static_assert(std::is_trivially_copyable<DiagnosticRaw>::value, "POD raw snapshot required");
++DiagnosticCapture& diagnostic_capture();
++class BidirectionalLabeling;
++class PricingProblem;
++class SPF;
++struct DiagnosticAccess {
++    static DiagnosticEntry entry(const BidirectionalLabeling& lbl, int level, std::size_t iteration, double callback_budget_ms);
++    static nlohmann::json instances(const BidirectionalLabeling& lbl);
++    static const PricingProblem& problem(const BidirectionalLabeling& lbl);
++};
++int diagnostic_checked_vertex(int id, int n);
++double diagnostic_customer_duals(const std::vector<int>& path, const DiagnosticRaw& raw);
++nlohmann::json diagnostic_raw_query(const DiagnosticRaw& raw, const std::vector<std::bitset<102>>& cuts, const PricingProblem& query);
++void diagnostic_terminal(const BidirectionalLabeling& lbl, const SPF& spf, bool root_optimum, int nodes,
++    const nlohmann::json& final_log, const nlohmann::json& root_log, const nlohmann::json& witness, const nlohmann::json& original, const nlohmann::json& experiment, const nlohmann::json& effective_settings);
++}
++#endif
+diff --git a/code/include/labeling/bidirectional_labeling.h b/code/include/labeling/bidirectional_labeling.h
+index 2757f76..308c1a2 100644
+--- a/code/include/labeling/bidirectional_labeling.h
++++ b/code/include/labeling/bidirectional_labeling.h
+@@ -45,6 +45,7 @@ public:
+ 	goc::BLBExecutionLog Run(const PricingProblem& pricing_problem, std::vector<goc::Route>* R);
+ 
+ private:
++    friend struct DiagnosticAccess;
+ 	// Attempts to merge label l against all the labels in the opposite direction dominance structure.
+ 	// 	w: 	l will be merged with all labels m in L such that v(m) == v(l) and v(parent(m)) == w.
+ 	// 		if w == -1, then the check v(parent(m)) == w is ignored.
+diff --git a/code/include/labeling/monodirectional_labeling.h b/code/include/labeling/monodirectional_labeling.h
+index e8cd735..7ebdcb5 100644
+--- a/code/include/labeling/monodirectional_labeling.h
++++ b/code/include/labeling/monodirectional_labeling.h
+@@ -65,6 +65,7 @@ public:
+ 	LazyLabel Init() const;
+ 	
+ private:
++    friend struct DiagnosticAccess;
+ 	// The extension step consists in taking a lazy label and building the complete label.
+ 	// Returns: the extended full label (notice that it may be infeasible, so it may be nullptr).
+ 	Label* ExtensionStep(const LazyLabel& ll) const;
+diff --git a/code/include/ms56_events.h b/code/include/ms56_events.h
+index 1104161..b6d48eb 100644
+--- a/code/include/ms56_events.h
++++ b/code/include/ms56_events.h
+@@ -8,7 +8,7 @@ namespace ms56 {
+ inline long long now_ns() { return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+ inline double elapsed() { const char* p = std::getenv("PROBE_START_MONOTONIC_NS"); return p ? (now_ns()-std::stoll(p))/1e9 : 0.0; }
+ inline double remaining() { const char* p = std::getenv("PROBE_DEADLINE_MONOTONIC_NS"); return p ? std::max(0.0,(std::stoll(p)-now_ns())/1e9) : 0.0; }
+-inline void emit(nlohmann::json event) { event["elapsed_s"]=elapsed(); std::cout << event << std::endl; }
++inline void emit(nlohmann::json event) { if (event.value("event", "") == "closure") { event["event"]="phase"; event["native_event"]="closure"; event["proof_acceptance"]="diagnostic_only_no_closure_credit"; } event["elapsed_s"]=elapsed(); std::cout << event << std::endl; }
+ inline void candidate(const goc::VRPSolution& solution, const std::string& origin) {
+     nlohmann::json routes=nlohmann::json::array();
+     const char* end_text=std::getenv("UPSTREAM_EXPECTED_END_DEPOT");
+diff --git a/code/src/bcp/bcp.cpp b/code/src/bcp/bcp.cpp
+index 56bed53..d494462 100644
+--- a/code/src/bcp/bcp.cpp
++++ b/code/src/bcp/bcp.cpp
+@@ -5,6 +5,7 @@
+ //
+ 
+ #include "bcp/bcp.h"
++#include "diagnostic_capture.h"
+ #include "ms56_events.h"
+ 
+ #include <climits>
+@@ -24,6 +25,7 @@ BCP::BCP(const Digraph& D, SPF* spf) : D(D), spf(spf), z_lb(-INFTY), z_ub(INFTY)
+ 	cg_solver.pricing_function = [&] (const vector<double>& duals, double incumbent_value, Duration time_limit, CGExecutionLog* cg_execution_log) {
+ 		int variable_count = this->spf->formulation->VariableCount();
+ 		Stopwatch iteration_rolex(true);
++		diagnostic_capture().snapshot_raw(duals.data(), duals.size(), this->D.VertexCount(), this->spf->cuts.size(), this->spf->formulation->ConstraintCount(), node_seq);
+ 		auto pp = this->spf->InterpretDuals(duals);
+ 		pricing_solver(pp, 0, time_limit, cg_execution_log);
+ 		*log.pricing_time += iteration_rolex.Peek();
+diff --git a/code/src/diagnostic_capture.cpp b/code/src/diagnostic_capture.cpp
+new file mode 100644
+index 0000000..a52029d
+--- /dev/null
++++ b/code/src/diagnostic_capture.cpp
+@@ -0,0 +1,144 @@
++#include "diagnostic_capture.h"
++#include "labeling/bidirectional_labeling.h"
++#include "bcp/spf.h"
++#include "bcp/pricing_problem.h"
++#include "goc/math/number_utils.h"
++namespace networks2019 {
++using nlohmann::json;
++using goc::pwl_diag::bits;
++DiagnosticCapture& diagnostic_capture() { static DiagnosticCapture value; return value; }
++int diagnostic_checked_vertex(int id, int n) {
++    if (n < 2 || n > DiagnosticMaxVertices || id < 0 || id >= n) goc::pwl_diag::stop("invalid_vertex_before_indexing");
++    return id;
++}
++double diagnostic_customer_duals(const std::vector<int>& path, const DiagnosticRaw& raw) {
++    double result=0.0;
++    for (int id : path) {
++        diagnostic_checked_vertex(id, raw.vertex_count);
++        if (id!=0 && id!=raw.vertex_count-1) result+=raw.duals[id];
++    }
++    return result;
++}
++namespace {
++json cut_record(const std::bitset<102>& cut, int n) {
++    json values=json::array();
++    for (int i=0; i<102; ++i) if (cut.test(i)) {
++        diagnostic_checked_vertex(i,n);
++        if (i==0 || i==n-1) goc::pwl_diag::stop("depot_in_subset_row_cut");
++        values.push_back(i);
++    }
++    if (values.size()!=3) goc::pwl_diag::stop("non_triple_subset_row_cut");
++    return values;
++}
++json arcs_record(const std::vector<goc::Arc>& arcs, int n) {
++    json result=json::array();
++    for (auto arc : arcs) result.push_back({diagnostic_checked_vertex(arc.tail,n),diagnostic_checked_vertex(arc.head,n)});
++    return result;
++}
++json instance_record(const VRPInstance& v) {
++    const int n=v.D.VertexCount();
++    if (n<2 || n>102 || v.tw.size()!=static_cast<std::size_t>(n) || v.q.size()!=static_cast<std::size_t>(n))
++        goc::pwl_diag::stop("instance_dimension_mismatch");
++    json successors=json::array(), predecessors=json::array(), windows=json::array(), demands=json::array();
++    for (int i=0; i<n; ++i) {
++        for (int id : v.D.Successors(i)) diagnostic_checked_vertex(id,n);
++        for (int id : v.D.Predecessors(i)) diagnostic_checked_vertex(id,n);
++        successors.push_back(v.D.Successors(i)); predecessors.push_back(v.D.Predecessors(i));
++        windows.push_back({bits(v.tw[i].left),bits(v.tw[i].right)}); demands.push_back(bits(v.q[i]));
++    }
++    auto functions = [&](const goc::Matrix<goc::PWLFunction>& matrix) {
++        if (matrix.row_count()!=n || matrix.column_count()!=n) goc::pwl_diag::stop("function_matrix_dimension_mismatch");
++        json rows=json::array();
++        for (int i=0;i<n;++i) { json row=json::array(); for (int j=0;j<n;++j) row.push_back(goc::pwl_diag::function_record(matrix[i][j])); rows.push_back(row); }
++        return rows;
++    };
++    if (v.LDT.row_count()!=n || v.LDT.column_count()!=n) goc::pwl_diag::stop("ldt_dimension_mismatch");
++    json ldt=json::array();
++    for (int i=0;i<n;++i) { json row=json::array(); for (int j=0;j<n;++j) row.push_back(bits(v.LDT[i][j])); ldt.push_back(row); }
++    return {{"vertex_count",n},{"origin",diagnostic_checked_vertex(v.o,n)},{"destination",diagnostic_checked_vertex(v.d,n)},
++        {"horizon_bits",bits(v.T)},{"capacity_bits",bits(v.Q)},{"windows_bits",windows},{"demands_bits",demands},
++        {"graph",{{"successors",successors},{"predecessors",predecessors},{"ordered_arcs",arcs_record(v.D.Arcs(),n)}}},
++        {"tau",functions(v.tau)},{"arr",functions(v.arr)},{"dep",functions(v.dep)},{"pretau",functions(v.pretau)},{"ldt_bits",ldt}};
++}
++json entry_record(const DiagnosticEntry& e) {
++    return {{"call_ordinal",e.call_ordinal},{"callback_generation",e.callback_generation},{"level",e.level},
++        {"closing_state",e.closing_state},{"merge_start",e.merge_start},{"solution_limit",e.solution_limit},
++        {"partial",e.partial},{"relax_elementary_check",e.relax_elementary_check},{"relax_cost_check",e.relax_cost_check},
++        {"limited_extension",e.limited_extension},{"lazy_extension",e.lazy_extension},{"unreachable_strengthened",e.unreachable_strengthened},
++        {"sort_by_cost",e.sort_by_cost},{"correcting",e.correcting},{"symmetric",e.symmetric},
++        {"process_limits",{e.process_limit[0],e.process_limit[1]}},{"cross",{e.cross[0],e.cross[1]}},
++        {"time_budget_seconds_bits",bits(e.time_budget_seconds)},{"time_budget_milliseconds_bits",bits(e.time_budget_milliseconds)},{"callback_budget_milliseconds_bits",bits(e.callback_budget_milliseconds)},{"initial_middle_bits",{bits(e.initial_middle[0]),bits(e.initial_middle[1])}},
++        {"pool_bucket_count",e.pool_bucket_count},{"pool_max_load_factor_bits",bits(e.pool_max_load_factor)},
++        {"returned_status",e.returned_status},{"finished",e.finished},{"route_count",e.route_count},{"source_iteration_index",e.source_iteration_index}};
++}
++}
++json diagnostic_raw_query(const DiagnosticRaw& raw, const std::vector<std::bitset<102>>& cuts, const PricingProblem& query) {
++    if (raw.vertex_count<2 || raw.vertex_count>102 || raw.cut_count<0 || raw.cut_count>500 || raw.length>602 || cuts.size()!=static_cast<std::size_t>(raw.cut_count) ||
++        raw.length!=static_cast<std::size_t>(raw.vertex_count+raw.cut_count) || raw.row_count!=static_cast<int>(raw.length) ||
++        query.P.size()!=static_cast<std::size_t>(raw.vertex_count) || query.S.size()!=query.sigma.size())
++        goc::pwl_diag::stop("terminal_raw_query_shape_mismatch");
++    json duals=json::array(), profits=json::array(), ordered=json::array(), filtered=json::array(), sigma=json::array(), indices=json::array();
++    for (std::size_t i=0;i<raw.length;++i) duals.push_back(bits(raw.duals[i]));
++    for (int i=0;i<raw.vertex_count;++i) {
++        if (bits(query.P[i])!=bits(raw.duals[i])) goc::pwl_diag::stop("terminal_profit_bits_mismatch");
++        profits.push_back(bits(query.P[i]));
++    }
++    std::size_t k=0;
++    for (std::size_t i=0;i<cuts.size();++i) {
++        auto vertices=cut_record(cuts[i],raw.vertex_count); ordered.push_back(vertices);
++        const double dual=raw.duals[raw.vertex_count+i];
++        if (goc::epsilon_different(dual,0.0)) {
++            if (k>=query.S.size() || cuts[i]!=query.S[k] || bits(dual)!=bits(query.sigma[k]))
++                goc::pwl_diag::stop("terminal_filtered_context_mismatch");
++            filtered.push_back(vertices); sigma.push_back(bits(query.sigma[k])); indices.push_back(i); ++k;
++        }
++    }
++    if (k!=query.S.size()) goc::pwl_diag::stop("terminal_filtered_context_extra_cut");
++    return {{"raw_master",{{"callback_generation",raw.generation},{"pricing_node_count",raw.node_count},{"vertex_row_count",raw.vertex_count},
++        {"cut_count",raw.cut_count},{"row_count",raw.row_count},{"dual_bits",duals},{"ordered_cuts",ordered},
++        {"dual_semantics","duals_passed_to_terminal_pricing_not_postsolve_duals"},{"depot_route_coefficients",{0,0}}}},
++        {"native_query",{{"profit_bits",profits},{"forbidden_arcs",arcs_record(query.A,raw.vertex_count)},
++        {"filtered_cuts",filtered},{"filtered_sigma_bits",sigma},{"raw_cut_indices",indices},{"eps_bits",bits(goc::EPS)},
++        {"filter_predicate","fabs(dual)>=EPS"}}}};
++}
++DiagnosticEntry DiagnosticAccess::entry(const BidirectionalLabeling& l, int level, std::size_t iteration, double callback_budget_ms) {
++    DiagnosticEntry e{}; e.level=level; e.merge_start=l.merge_start; e.closing_state=l.closing_state;
++    e.solution_limit=l.solution_limit; e.partial=l.partial; e.relax_elementary_check=l.relax_elementary_check;
++    e.relax_cost_check=l.relax_cost_check; e.limited_extension=l.limited_extension; e.lazy_extension=l.lazy_extension;
++    e.unreachable_strengthened=l.unreachable_strengthened; e.sort_by_cost=l.sort_by_cost; e.correcting=l.correcting;
++    e.symmetric=l.symmetric; e.time_budget_seconds=l.time_limit.Amount(goc::DurationUnit::Seconds);
++    e.time_budget_milliseconds=l.time_limit.Amount(goc::DurationUnit::Milliseconds); e.callback_budget_milliseconds=callback_budget_ms;
++    e.source_iteration_index=iteration; e.pool_bucket_count=l.S.bucket_count(); e.pool_max_load_factor=l.S.max_load_factor();
++    for(int d=0;d<2;++d) {e.process_limit[d]=l.lbl_[d].process_limit; e.cross[d]=l.lbl_[d].cross; e.initial_middle[d]=l.symmetric?l.vrp_.T/2:l.vrp_.T;}
++    return e;
++}
++const PricingProblem& DiagnosticAccess::problem(const BidirectionalLabeling& l) { return l.pp_; }
++json DiagnosticAccess::instances(const BidirectionalLabeling& l) {
++    return {{"bidirectional",instance_record(l.vrp_)},{"forward",instance_record(l.lbl_[0].vrp_)},{"backward",instance_record(l.lbl_[1].vrp_)},
++        {"returned_pool_bucket_count",l.S.bucket_count()},{"returned_pool_max_load_factor_bits",bits(l.S.max_load_factor())}};
++}
++void diagnostic_terminal(const BidirectionalLabeling& lbl, const SPF& spf, bool root_optimum, int nodes,
++    const json& final_log, const json& root_log, const json& witness, const json& original, const json& experiment, const json& effective_settings) {
++    const auto& c=diagnostic_capture(); const auto& pp=DiagnosticAccess::problem(lbl);
++    const char* reason=c.eligibility(true,root_optimum,nodes,pp.A.empty());
++    if (!reason && original.value("instance_name",std::string())!="C104_100") reason="outside_initial_c104_root_scope";
++    json record={{"schema","ms58-f2-terminal-pricing/v1"},{"identity",goc::pwl_diag::identity_record()},
++        {"proof_acceptance","diagnostic_only_no_closure_credit"},{"source_bcp_log",final_log},{"effective_settings",effective_settings}};
++    if (reason) {record["kind"]="no_terminal_capture"; record["reason"]=reason; record["entry_policy"]=entry_record(c.entry); goc::pwl_diag::write_exclusive(record); return;}
++    if (spf.cuts.size()!=static_cast<std::size_t>(c.raw.cut_count) || spf.formulation->ConstraintCount()!=c.raw.row_count)
++        goc::pwl_diag::stop("terminal_generation_rows_or_cuts_changed");
++    if (!root_log.is_object() || !root_log.count("iterations") || c.entry.source_iteration_index+1!=root_log["iterations"].size() ||
++        root_log["iterations"][c.entry.source_iteration_index].value("iteration_name",std::string())!="Exact")
++        goc::pwl_diag::stop("terminal_source_iteration_mismatch");
++    const auto contexts=diagnostic_raw_query(c.raw,spf.cuts,pp);
++    record["kind"]="terminal_root_pricing"; record["processed_node_count"]=nodes; record["entry_policy"]=entry_record(c.entry);
++    record["raw_master"]=contexts["raw_master"]; record["native_query"]=contexts["native_query"];
++    record["labeling_instances"]=DiagnosticAccess::instances(lbl); record["source_root_cg_log"]=root_log;
++    record["source_final_pricing_iteration"]=root_log["iterations"][c.entry.source_iteration_index];
++    record["returned_witness"]=witness; record["terminal_returned_paths"]=json::array();
++    if (witness.is_object() && witness.count("value")) record["returned_witness"]["value_bits"]=bits(witness["value"].get<double>());
++    if (witness.is_object() && witness.count("routes")) for (auto& route : record["returned_witness"]["routes"]) { route["t0_bits"]=bits(route["t0"].get<double>()); route["duration_bits"]=bits(route["duration"].get<double>()); } record["original_instance"]=original; record["experiment"]=experiment;
++    record["source_returned_route_count"]=c.entry.route_count; record["serialization_phase"]="after_bcp_run_return";
++    goc::pwl_diag::write_exclusive(record);
++}
++}
+diff --git a/code/src/main_bp.cpp b/code/src/main_bp.cpp
+index 71828ae..2be6ecb 100644
+--- a/code/src/main_bp.cpp
++++ b/code/src/main_bp.cpp
+@@ -8,6 +8,7 @@
+ #include <vector>
+ #include <climits>
+ #include "ms56_events.h"
++#include "diagnostic_capture.h"
+ 
+ #include <goc/goc.h>
+ 
+@@ -44,6 +45,7 @@ int main(int argc, char** argv)
+ 
+ 		if (argc > 1) simulate_runner_input("instances/dabia_et_al_2013", "R210_50", "experiments/bp.json", "BP-CUTS");
+ 
++		goc::pwl_diag::require_bindings();
+ 		json experiment, instance, solutions;
+ 		cin >> experiment >> instance >> solutions;
+ 
+@@ -74,6 +76,7 @@ int main(int argc, char** argv)
+ 		clog << "Iterative merge: " << iterative_merge << endl;
+ 		clog << "Exact labeling: " << exact_labeling << endl;
+ 
++		goc::pwl_diag::context().phase = 1;
+ 		// Preprocess instance JSON.
+ 		clog << "Preprocessing..." << endl;
+ 		preprocess_capacity(instance);
+@@ -98,6 +101,7 @@ int main(int argc, char** argv)
+ 		bcp.cut_limit = cut_limit;
+ 		bcp.node_limit = node_limit;
+ 
++		goc::pwl_diag::context().phase = 2;
+ 		BidirectionalLabeling lbl(vrp);
+ 		lbl.solution_limit = 3000;
+ 		lbl.closing_state = !iterative_merge;
+@@ -123,7 +127,9 @@ int main(int argc, char** argv)
+ 				lbl.relax_cost_check = heuristic_level == 0;
+ 				lbl.relax_elementary_check = heuristic_level == 1;
+ 				if (heuristic_level==2) ++exact_calls;
++				diagnostic_capture().enter(DiagnosticAccess::entry(lbl, heuristic_level, cg_execution_log->iterations->size(), tlimit.Amount(DurationUnit::Milliseconds)));
+ 				auto lbl_log = lbl.Run(pricing_problem, &R);
++				diagnostic_capture().leave(static_cast<int>(*lbl_log.status), lbl_log.status == BLBStatus::Finished, R.size());
+ 				if (heuristic_level==2 && lbl_log.status==BLBStatus::Finished) { ++exact_finished; if(R.empty()) bcp.final_pricing_complete=true; }
+ 				if(ms56::remaining()<=0 || lbl_log.status==BLBStatus::TimeLimitReached) {cg_execution_log->status=CGStatus::TimeLimitReached;break;}
+ 
+@@ -149,7 +155,20 @@ int main(int argc, char** argv)
+ 		};
+ 		VRPSolution solution(INFTY, {});
+ 		auto log = bcp.Run(&solution);
+-
++		goc::pwl_diag::context().phase = 4;
++		try { const json original_instance = goc::pwl_diag::deferred_original_input();
++            diagnostic_terminal(lbl, spf, log.status == BCStatus::Optimum && log.nodes_closed == 1 && log.nodes_open == 0 && log.root_log.IsSet() && log.root_log->value("status", std::string()) == "Optimum",
++			bcp.DiagnosticNodeCount(), log.ToJSON(), log.root_log.IsSet() ? *log.root_log : json(nullptr), solution, original_instance, experiment,
++                {{"cut_limit",cut_limit},{"node_limit",node_limit},{"partial",partial},{"limited_extension",limited_extension},
++                 {"lazy_extension",lazy_extension},{"unreachable_strengthened",unreachable_strengthened},{"sort_by_cost",sort_by_cost},
++                 {"symmetric",symmetric},{"iterative_merge",iterative_merge},{"exact_labeling",exact_labeling},{"correcting",lbl.correcting},
++                 {"requested_time_limit_seconds_bits",goc::pwl_diag::bits(time_limit.Amount(DurationUnit::Seconds))},
++                 {"bcp_time_budget_seconds_bits",goc::pwl_diag::bits(bcp.time_limit.Amount(DurationUnit::Seconds))},
++                 {"eps_bits",goc::pwl_diag::bits(EPS)}});
++        } catch (const goc::pwl_diag::Error&) { throw; }
++          catch (const std::exception& error) { std::cerr << "MS58_CAPTURE_FAILURE " << error.what() << std::endl; return 87; }
++
++        output["diagnostic_only"]=true; output["proof_acceptance"]="diagnostic_only_no_closure_credit";
+ 		output["Exact"] = log;
+ 		output["exact_pricing"]={{"restricted_master_infeasible",bcp.restricted_master_infeasible},{"unbranched_fractional",bcp.unbranched_fractional},{"calls",exact_calls},{"finished",exact_finished},{"cg_optimum_count",bcp.cg_optimum_count},{"certified_cg_optimum_count",bcp.certified_cg_optimum_count}};
+ 		output["Best solution"] = solution;
+@@ -169,6 +188,11 @@ int main(int argc, char** argv)
+ 		// Send JSON output to cout.
+ 		ms56::emit({{"event","native_final"},{"native_result",output}});
+ 	}
++	catch (const goc::pwl_diag::Error& e)
++	{
++		std::cerr << "MS58_DIAGNOSTIC_ERROR " << e.code << " " << e.what() << std::endl;
++		return e.code;
++	}
+ 	catch (std::bad_alloc& e)
+ 	{
+ 		return 3;
+diff --git a/diagnostic/README.md b/diagnostic/README.md
+new file mode 100644
+index 0000000..8613457
+--- /dev/null
++++ b/diagnostic/README.md
+@@ -0,0 +1,17 @@
++# Experimental f2 numerical and terminal-pricing diagnostic
++
++We derive this source from exact `f2c9e205bd1ecc9afb45d5efe7fcb0df881f2b33`. We preserve that control and its correction=false setting. The derivative checks the 2 descending Compose searches before indexing, records an invalid operation and exits with code 86. It supplies no replacement composition. Valid guard and call-snapshot operations allocate no memory in the local synthetic gate.
++
++We retain only scalar call-entry policy and a bounded raw-dual snapshot during pricing. We serialize the terminal task after `BCP::Run` returns. Eligibility requires the C104_100 root-only completed case, an Exact/Finished/empty final call, no forbidden arcs, unchanged row/cut counts and matching callback generations. We preserve all ordered master cuts and raw duals separately from the original EPS-filtered native query. We reload the pinned native input after BCP returns and verify its SHA-256 before parsing, without adding a pre-solve deep copy. The artifact records actual stored forward/reverse functions, cached intervals, graph order and LDT tables using exact double bits. We never reconstruct these functions through `AddPiece` for serialization.
++
++The [schema](SCHEMA.json) defines every field. Artifacts use exclusive creation and an envelope whose complete marker is written last. Invalid indexing exits with 86. Capture failure exits with 87. An ordinary deadline retains its original native status and produces an explicit no-terminal-capture reason. Every closure event is marked as an uncredited diagnostic phase, and final native output carries diagnostic-only metadata. These artifacts establish no accepted closure.
++
++We run deterministic local gates with the following command from a suitable development environment.
++
++```bash
++python diagnostic/run_local_gates.py --reference-goc /path/to/exact-f2/code/goc --cplex-include /path/to/cplex/include --output /new/local/gate-directory
++```
++
++The gate compiles only the numerical/capture-state fixture and its required translation units. It never runs BCP or a routing solver. It tests invalid and valid composition, original-f2 bitwise valid outputs, deferred call-sequence state, sub-EPS cut dual retention, zero depot coefficients, invalid vertex rejection, raw-buffer bounds, filtered-context consistency, exclusive publication and partial-record rejection. Compiler output and every test outcome remain in the new output directory.
++
++The reproducible package includes source and patch inventories, an unchanged original-f2 numerical reference subset, and a reserved-compute build driver. The build driver builds `bp` and runs synthetic gates only. It does not reserve resources or launch a routing instance. Source-level intended equivalence does not guarantee equal search trajectories because instrumentation can affect layout and timing. Routing reachability, terminal capture on C104, native work equality, same-source replay and cross-engine replay remain untested or unimplemented in this delivery.
+diff --git a/diagnostic/SCHEMA.json b/diagnostic/SCHEMA.json
+new file mode 100644
+index 0000000..565af38
+--- /dev/null
++++ b/diagnostic/SCHEMA.json
+@@ -0,0 +1,221 @@
++{
++  "schema": "ms58-f2-terminal-pricing/v1",
++  "status": "authoritative field contract for initial capture only; replay not implemented",
++  "publication": {
++    "envelope": {
++      "record": "object described below",
++      "complete": true
++    },
++    "exclusive_create": true,
++    "complete_marker_written_last": true,
++    "must_validate_complete_json_and_required_fields": true,
++    "partial_or_complete_false": "reject",
++    "diagnostic_path_environment": "MS58_DIAGNOSTIC_CAPTURE_PATH"
++  },
++  "common_record_fields": {
++    "schema": "ms58-f2-terminal-pricing/v1",
++    "kind": [
++      "invalid_compose",
++      "terminal_root_pricing",
++      "no_terminal_capture",
++      "capture_failure"
++    ],
++    "identity": {
++      "base_source": "f2c9e205bd1ecc9afb45d5efe7fcb0df881f2b33",
++      "PROBE_MANIFEST_HASH": "64 lowercase hex, frozen manifest binds checker/backend/numerical settings",
++      "PROBE_RUN_ID": "64 lowercase hex",
++      "UPSTREAM_NATIVE_INPUT_SHA256": "64 lowercase hex, exact original f2 Dabia JSON bytes",
++      "MS58_DIAGNOSTIC_RAW_INPUT_SHA256": "64 lowercase hex, exact materialized checker input bytes",
++      "MS58_DIAGNOSTIC_SOURCE_INVENTORY_SHA256": "64 lowercase hex, derivative source inventory",
++      "MS58_DIAGNOSTIC_NATIVE_INPUT_PATH": "harness-supplied local native JSON path; bytes reloaded/hashed against UPSTREAM_NATIVE_INPUT_SHA256 only after BCP returns; provenance may differ from a relocated local checker path, whose exact bytes must match the native hash. If a frozen manifest is supplied, compare the original path to its diagnostic binding."
++    },
++    "source_bcp_log": "For terminal_root_pricing and no_terminal_capture, original final BCP log JSON with faithful status/settings/work; it grants no closure credit.",
++    "effective_settings": "For terminal_root_pricing/no_terminal_capture, actual parsed/defaulted cut_limit,node_limit,partial,limited_extension,lazy_extension,unreachable_strengthened,sort_by_cost,symmetric,iterative_merge,exact_labeling,correcting; requested_time_limit_seconds_bits,bcp_time_budget_seconds_bits,eps_bits. Backend settings remain in original emitted backend_settings events bound through frozen manifest/run ID."
++  },
++  "binary64": "An unsigned integer in [0,2^64-1] is the exact IEEE754 double bit pattern; decode with struct.pack('<Q',bits) then struct.unpack('<d',...). Require finite values where mathematical quantities are expected. Cached empty function intervals retain native finite INFTY sentinels.",
++  "function": {
++    "encoding": "f2-legacy-scalar-binary64-uint64",
++    "cached_domain_bits": [
++      "left bits",
++      "right bits"
++    ],
++    "cached_image_bits": [
++      "left bits",
++      "right bits"
++    ],
++    "piece_count": "nonnegative integer matching pieces length",
++    "pieces": [
++      {
++        "domain_bits": [
++          "left bits",
++          "right bits"
++        ],
++        "image_bits": [
++          "left bits",
++          "right bits"
++        ],
++        "slope_bits": "uint64",
++        "intercept_bits": "uint64"
++      }
++    ],
++    "reconstruction_warning": "Audit the actual fields. Do not round-trip through AddPiece and assume neutral merging. No CHOICE/JUMP tags exist in this legacy scalar encoding."
++  },
++  "invalid_compose": {
++    "site": [
++      "constant_descending_search",
++      "decreasing_descending_search"
++    ],
++    "outer_index": "attempted i before indexing",
++    "inner_piece_index": "j",
++    "outer_piece_count": "f.PieceCount",
++    "inner_piece_count": "g.PieceCount",
++    "outer": "function record",
++    "inner": "function record",
++    "phase": "0 startup, 1 preprocessing, 2 labeler construction, 3 pricing, 4 after BCP return",
++    "call_ordinal": "uint64, zero before pricing",
++    "callback_generation": "uint64"
++  },
++  "terminal_root_pricing": {
++    "proof_acceptance": "diagnostic_only_no_closure_credit",
++    "serialization_phase": "after_bcp_run_return",
++    "source_returned_route_count": 0,
++    "terminal_returned_paths": [],
++    "entry_policy": {
++      "call_ordinal": "uint64",
++      "callback_generation": "must equal raw_master.callback_generation",
++      "level": 2,
++      "closing_state": "bool copied at entry, not after callback resets",
++      "merge_start": "int copied at entry",
++      "solution_limit": "int",
++      "partial": "bool",
++      "relax_elementary_check": false,
++      "relax_cost_check": false,
++      "limited_extension": "bool",
++      "lazy_extension": "bool",
++      "unreachable_strengthened": "bool",
++      "sort_by_cost": "bool",
++      "correcting": false,
++      "symmetric": "bool",
++      "process_limits": [
++        "forward int",
++        "backward int"
++      ],
++      "cross": [
++        "forward bool",
++        "backward bool"
++      ],
++      "time_budget_seconds_bits": "uint64",
++      "initial_middle_bits": [
++        "forward bits",
++        "backward bits"
++      ],
++      "pool_bucket_count": "size_t before Run clears S",
++      "pool_max_load_factor_bits": "binary64 widening of float, exact",
++      "returned_status": {
++        "DidNotStart": 0,
++        "TimeLimitReached": 1,
++        "SolutionLimitReached": 2,
++        "Finished": 3
++      },
++      "finished": true,
++      "route_count": 0,
++      "source_iteration_index": "index of last Exact entry in source_root_cg_log.iterations",
++      "time_budget_milliseconds_bits": "uint64, exact stored Duration milliseconds, use for faithful same-source reconstruction",
++      "callback_budget_milliseconds_bits": "uint64, supplied BCP callback budget retained separately from actual labeler budget"
++    },
++    "raw_master": {
++      "callback_generation": "uint64",
++      "vertex_row_count": "n, includes origin row0 and destination row n-1",
++      "cut_count": "k <= 500",
++      "row_count": "n+k",
++      "dual_bits": "ordered n+k uint64 values: origin, customers1..n-2, destination, cut0..cutk-1",
++      "ordered_cuts": "k ordered arrays of exactly3 customer vertex IDs, matching raw dual rows n+i",
++      "dual_semantics": "duals_passed_to_terminal_pricing_not_postsolve_duals",
++      "depot_route_coefficients": [
++        0,
++        0
++      ],
++      "pricing_node_count": 1
++    },
++    "native_query": {
++      "profit_bits": "n uint64 values, bit-identical to raw duals[0:n], including carried depot values",
++      "forbidden_arcs": "ordered [tail,head] pairs in native vertex IDs; must be empty for accepted initial capture",
++      "filtered_cuts": "ordered cut arrays whose raw cut dual passes f2 predicate",
++      "filtered_sigma_bits": "ordered uint64 raw cut duals for filtered_cuts",
++      "raw_cut_indices": "ordered raw cut indices for filtered context",
++      "eps_bits": "uint64 bits of f2 EPS=10e-6",
++      "filter_predicate": "fabs(dual)>=EPS"
++    },
++    "labeling_instances": {
++      "bidirectional": "actual stored instance record",
++      "forward": "actual stored forward monodirectional instance record",
++      "backward": "actual stored reversed monodirectional instance record",
++      "returned_pool_bucket_count": "size_t after terminal Run",
++      "returned_pool_max_load_factor_bits": "uint64"
++    },
++    "source_root_cg_log": "original root log JSON without adding per-call JSON during solve",
++    "source_final_pricing_iteration": "exact original source_root_cg_log.iterations[source_iteration_index], includes forward/backward counters and count_by_length",
++    "returned_witness": {
++      "kd_type": "vrp_solution",
++      "value": "native final incumbent numeric value, not a terminal returned pricing path",
++      "value_bits": "uint64",
++      "routes": [
++        {
++          "path": "native IDs including both depots",
++          "t0": "native numeric start",
++          "duration": "native numeric duration",
++          "t0_bits": "uint64",
++          "duration_bits": "uint64"
++        }
++      ]
++    },
++    "original_instance": "unaltered original native input JSON reloaded only after BCP returns, bytes verified against pinned native SHA256 before parsing; no pre-solve deep copy",
++    "experiment": "actual parsed original solver experiment JSON",
++    "processed_node_count": 1
++  },
++  "instance_record": {
++    "vertex_count": "n",
++    "origin": "native vertex ID (reverse instance swaps depots)",
++    "destination": "native vertex ID",
++    "horizon_bits": "uint64",
++    "capacity_bits": "uint64",
++    "windows_bits": "n pairs [left bits,right bits]",
++    "demands_bits": "n uint64",
++    "graph": {
++      "successors": "n ordered native successor arrays",
++      "predecessors": "n ordered native predecessor arrays",
++      "ordered_arcs": "actual [tail,head] list"
++    },
++    "tau": "n by n function records including nonarc and diagonal cells",
++    "arr": "n by n function records",
++    "dep": "n by n function records",
++    "pretau": "n by n function records",
++    "ldt_bits": "n by n uint64"
++  },
++  "witness_checking_contract": {
++    "native_ids": "origin0, customers1..n-2, destinationn-1. Validate IDs before indexing or converting to pinned checker customer IDs.",
++    "raw_reduced_cost": "checked_duration - sum(customer duals for customers visited) - sum(raw cut dual_i * coefficient_i); depots have route coefficient0",
++    "subset_row_coefficient": "1 exactly when the elementary route visits at least2 of the cut's3 distinct customers",
++    "native_filtered_reduced_cost": "retain separately using native_query filtered cuts/sigma; never replace raw all-cut calculation",
++    "feasibility": "independent pinned checker route evaluation, elementary coverage, capacity/time feasibility, forbidden arcs",
++    "original_cost_crosscheck": "preserve f2 native route duration separately from checker duration; any later replay native costs must not be substituted silently"
++  },
++  "nonterminal_kinds": {
++    "no_terminal_capture": [
++      "reason",
++      "entry_policy",
++      "proof_acceptance"
++    ],
++    "capture_failure": [
++      "reason",
++      "phase",
++      "call_ordinal",
++      "callback_generation"
++    ]
++  },
++  "process_exit_codes": {
++    "invalid_compose": 86,
++    "capture_failure": 87,
++    "ordinary_deadline": "native existing status retained, no terminal completeness capture"
++  }
++}
+diff --git a/diagnostic/run_local_gates.py b/diagnostic/run_local_gates.py
+new file mode 100644
+index 0000000..a4c29cd
+--- /dev/null
++++ b/diagnostic/run_local_gates.py
+@@ -0,0 +1,105 @@
++"""Compile and run only deterministic numerical and capture-state synthetic gates."""
++import argparse
++import hashlib
++import json
++import os
++from pathlib import Path
++import resource
++import shutil
++import subprocess
++
++MODES = {'numeric-disjoint':86,'numeric-empty':86,'numeric-empty-decreasing':86,
++    'numeric-valid-overlap':0,'numeric-valid-increasing':0,'numeric-valid-decreasing':0,
++    'input-vectors':0,'input-reload':0,'input-before-return':87,'input-hash-mismatch':87,
++    'sequence':0,'invalid-vertex':87,'raw-overflow':87,'filter-mismatch':87}
++
++
++def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
++
++def load_envelope(path):
++    value=json.loads(path.read_bytes())
++    if value.get('complete') is not True or not isinstance(value.get('record'),dict):
++        raise ValueError('Missing complete capture envelope')
++    if value['record'].get('schema')!='ms58-f2-terminal-pricing/v1':
++        raise ValueError('Unknown capture schema')
++    return value['record']
++
++def main():
++    parser=argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--output',type=Path,required=True)
++    parser.add_argument('--compiler',default='c++')
++    parser.add_argument('--reference-goc',type=Path,required=True)
++    parser.add_argument('--cplex-include',type=Path,default=Path.home()/'cplex1210/cplex/include')
++    args=parser.parse_args()
++    resource.setrlimit(resource.RLIMIT_CORE,(0,0))
++    source=Path(__file__).resolve().parents[1]
++    output=args.output.resolve();output.mkdir(parents=True,exist_ok=False)
++    compiler=Path(shutil.which(args.compiler) or args.compiler).resolve()
++    units=['diagnostic/tests/native_fixture.cpp','code/src/diagnostic_capture.cpp','code/src/bcp/pricing_problem.cpp',
++        'code/goc/src/math/pwl_diagnostic.cpp','code/goc/src/math/diagnostic_input.cpp','code/goc/src/math/pwl_function.cpp','code/goc/src/math/linear_function.cpp',
++        'code/goc/src/math/point_2d.cpp','code/goc/src/math/interval.cpp','code/goc/src/print/printable.cpp','code/goc/src/graph/arc.cpp']
++    binary=output/'native-fixture'
++    command=[str(compiler),'-std=c++14','-O0','-g','-D_GLIBCXX_ASSERTIONS','-ffp-contract=off','-ffunction-sections','-fdata-sections',
++        '-I'+str(source/'code/include'),'-I'+str(source/'code/goc/include'),'-I'+str(args.cplex_include),
++        *[str(source/p) for p in units],'-Wl,--gc-sections','-o',str(binary)]
++    (output/'plan.json').write_text(json.dumps(dict(command=command,compiler_sha256=sha(compiler),
++        units={p:sha(source/p) for p in units},schema_sha256=sha(source/'diagnostic/SCHEMA.json'),routing_runs=0),indent=2)+'\n')
++    with (output/'compile.stdout').open('x') as out,(output/'compile.stderr').open('x') as err:
++        code=subprocess.run(command,stdout=out,stderr=err,timeout=180).returncode
++    rows=[]
++    sample=output/'synthetic-native-input.json'
++    sample.write_text(json.dumps({'instance_name':'C104_100','synthetic_data':'a'*1000})+'\n')
++    if code==0:
++        for mode,expected in MODES.items():
++            artifact=output/(mode+'.json')
++            env=dict(os.environ,MS58_DIAGNOSTIC_CAPTURE_PATH=str(artifact))
++            for key in ('PROBE_MANIFEST_HASH','PROBE_RUN_ID','UPSTREAM_NATIVE_INPUT_SHA256','MS58_DIAGNOSTIC_RAW_INPUT_SHA256','MS58_DIAGNOSTIC_SOURCE_INVENTORY_SHA256'):env[key]='0'*64
++            env['MS58_DIAGNOSTIC_NATIVE_INPUT_PATH']=str(sample)
++            env['UPSTREAM_NATIVE_INPUT_SHA256']='0'*64 if mode=='input-hash-mismatch' else sha(sample)
++            with (output/(mode+'.stdout')).open('x') as out,(output/(mode+'.stderr')).open('x') as err:
++                observed=subprocess.run([str(binary),mode],env=env,stdout=out,stderr=err,timeout=30).returncode
++            valid=observed==expected
++            record=load_envelope(artifact) if artifact.exists() else None
++            if expected==86:
++                valid &= record is not None and record['kind']=='invalid_compose' and record['outer_index']>=record['outer_piece_count']
++            elif expected==87: valid &= record is not None and record['kind']=='capture_failure'
++            elif mode=='sequence':valid &= record is not None and record['valid_path_diagnostic_allocations']==0
++            else:valid &= not artifact.exists()
++            rows.append(dict(mode=mode,expected=expected,returncode=observed,passed=bool(valid),
++                artifact_sha256=sha(artifact) if artifact.exists() else None))
++        # Compare the complete binary64 function fields with the original f2 math implementation.
++        reference=args.reference_goc.resolve(); reference_binary=output/'original-f2-valid'
++        reference_units=['math/pwl_function.cpp','math/linear_function.cpp','math/point_2d.cpp','math/interval.cpp','print/printable.cpp']
++        ref_command=[str(compiler),'-std=c++14','-O0','-g','-D_GLIBCXX_ASSERTIONS','-ffp-contract=off',
++            '-I'+str(reference/'include'),str(source/'diagnostic/tests/reference_valid.cpp'),
++            *[str(reference/'src'/p) for p in reference_units],'-o',str(reference_binary)]
++        with (output/'reference-compile.stdout').open('x') as out,(output/'reference-compile.stderr').open('x') as err:
++            ref_code=subprocess.run(ref_command,stdout=out,stderr=err,timeout=180).returncode
++        rows.append(dict(mode='reference-compile',passed=ref_code==0,returncode=ref_code,
++            command=ref_command,source_files={p:sha(reference/'src'/p) for p in reference_units}))
++        if ref_code==0:
++            for mode in ('numeric-valid-overlap','numeric-valid-increasing','numeric-valid-decreasing'):
++                with (output/(mode+'-reference.stdout')).open('x') as out,(output/(mode+'-reference.stderr')).open('x') as err:
++                    ref_run=subprocess.run([str(reference_binary),mode],stdout=out,stderr=err,timeout=30).returncode
++                original=json.loads((output/(mode+'-reference.stdout')).read_bytes())
++                observed=json.loads((output/(mode+'.stdout')).read_bytes())
++                rows.append(dict(mode=mode+'-original-bitwise-equality',passed=ref_run==0 and observed==original))
++        # Exclusive publication must retain the first complete artifact and fail a second create.
++        existing=output/'sequence.json';before=sha(existing)
++        with (output/'exclusive.stdout').open('x') as out,(output/'exclusive.stderr').open('x') as err:
++            repeated=subprocess.run([str(binary),'numeric-disjoint'],env=dict(env,MS58_DIAGNOSTIC_CAPTURE_PATH=str(existing)),stdout=out,stderr=err,timeout=30).returncode
++        rows.append(dict(mode='exclusive-publication',passed=repeated==87 and sha(existing)==before,returncode=repeated))
++        for index,body in enumerate(('{"record":', '{"record":{"schema":"ms58-f2-terminal-pricing/v1"},"complete":false}')):
++            partial=output/('partial-'+str(index)+'.json');partial.write_text(body)
++            try:load_envelope(partial)
++            except (ValueError,json.JSONDecodeError):accepted=False
++            else:accepted=True
++            rows.append(dict(mode='reject-partial-'+str(index),passed=not accepted))
++    result=dict(compile_returncode=code,rows=rows,all_checks_passed=code==0 and len(rows)==21 and all(r['passed'] for r in rows),
++        routing_runs=0,source_replay_implemented=False,cross_engine_replay_implemented=False,
++        qualification='Synthetic numerical/capture-state gates only. Routing reachability, recorded-work parity and terminal capture on C104 remain untested.')
++    (output/'complete.json').write_text(json.dumps(result,indent=2)+'\n')
++    print(json.dumps(result,indent=2))
++    return int(not result['all_checks_passed'])
++
++if __name__=='__main__':raise SystemExit(main())
+diff --git a/diagnostic/tests/native_fixture.cpp b/diagnostic/tests/native_fixture.cpp
+new file mode 100644
+index 0000000..e954839
+--- /dev/null
++++ b/diagnostic/tests/native_fixture.cpp
+@@ -0,0 +1,92 @@
++#include "diagnostic_capture.h"
++#include "bcp/pricing_problem.h"
++#include <cassert>
++#include <cstdlib>
++#include <iostream>
++#include <new>
++#include <stdexcept>
++#include <unistd.h>
++using namespace networks2019;
++using goc::PWLFunction;
++static bool watch_allocations=false;
++static std::size_t allocations=0;
++void* operator new(std::size_t n) { if(watch_allocations) ++allocations; if(void* p=std::malloc(n))return p; throw std::bad_alloc(); }
++void operator delete(void* p) noexcept {std::free(p);}
++void operator delete(void* p,std::size_t) noexcept {std::free(p);}
++void* operator new[](std::size_t n) {return ::operator new(n);}
++void operator delete[](void* p) noexcept {std::free(p);}
++static void require(bool condition,const char* text) {if(!condition)throw std::runtime_error(text);}
++int main(int argc,char** argv) {
++    if(argc!=2)return 2;
++    try {
++        const std::string mode=argv[1];
++        if(mode=="input-vectors") {
++            require(goc::pwl_diag::sha256_bytes("")=="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","empty hash vector");
++            require(goc::pwl_diag::sha256_bytes("abc")=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","abc hash vector");
++            std::cout<<"PASS hash vectors"<<std::endl;return 0;
++        }
++        if(mode=="input-reload"||mode=="input-before-return"||mode=="input-hash-mismatch") {
++            goc::pwl_diag::context().phase=mode=="input-before-return"?3:4;
++            const auto original=goc::pwl_diag::deferred_original_input();
++            require(original["instance_name"]=="C104_100","deferred native input changed");
++            std::cout<<"PASS deferred verified input"<<std::endl;return 0;
++        }
++        if(mode.find("numeric-")==0) {
++            const bool empty=mode=="numeric-empty"||mode=="numeric-empty-decreasing";
++            auto f=empty?PWLFunction():PWLFunction::ConstantFunction(0.0,{0,1});
++            auto g=mode=="numeric-disjoint"?PWLFunction::ConstantFunction(2.0,{0,1}):
++                mode=="numeric-valid-increasing"?PWLFunction({goc::LinearFunction({0,0},{2,1})}):
++                mode=="numeric-empty-decreasing"||mode=="numeric-valid-decreasing"?
++                    PWLFunction({goc::LinearFunction({0,1},{1,0})}):PWLFunction::ConstantFunction(0.5,{0,1});
++            auto result=f.Compose(g);
++            require(!empty&&mode!="numeric-disjoint","invalid composition returned replacement mathematics");
++            require(result.PieceCount()==1,"wrong piece count");
++            const double right=mode=="numeric-valid-increasing"?2:1;
++            require(result.Domain().left==0&&result.Domain().right==right,"wrong domain");
++            for(double x:{0.0,right/2,right})require(goc::pwl_diag::bits(result(x))==goc::pwl_diag::bits(0.0),"valid output bit mismatch");
++            std::cout<<goc::pwl_diag::function_record(result)<<std::endl;
++            return 0;
++        }
++        const double values[]={17,1,2,3,4,-19,1e-6,2e-5};
++        DiagnosticCapture capture;
++        capture.snapshot_raw(values,7,6,1,7,1);
++        DiagnosticEntry entry{}; entry.level=2; entry.closing_state=true; entry.merge_start=123;
++        entry.correcting=false;entry.lazy_extension=true;entry.solution_limit=3000;
++        capture.enter(entry);capture.leave(3,true,0);
++        entry.closing_state=false;entry.merge_start=0;
++        require(capture.entry.closing_state&&capture.entry.merge_start==123,"entry lost to callback resets");
++        require(capture.eligibility(false,true,1,true)!=nullptr,"early capture before BCP return");
++        require(::access(std::getenv("MS58_DIAGNOSTIC_CAPTURE_PATH"),F_OK)!=0,"early artifact emitted");
++        capture.snapshot_raw(values,8,6,2,8,1);
++        require(std::string(capture.eligibility(true,true,1,true))=="raw_dual_generation_mismatch","generation mismatch accepted");
++        entry.level=0;capture.enter(entry);capture.leave(3,true,1);
++        require(capture.eligibility(true,true,1,true)!=nullptr,"heuristic call accepted");
++        entry.level=2;capture.enter(entry);capture.leave(3,true,0);
++        require(capture.eligibility(true,true,1,true)==nullptr,"final Exact empty rejected");
++        require(capture.eligibility(true,true,2,true)!=nullptr,"nonroot accepted");
++        require(capture.eligibility(true,true,1,false)!=nullptr,"forbidden arcs accepted");
++        if(mode=="invalid-vertex") { diagnostic_customer_duals({0,6,5},capture.raw);return 99; }
++        if(mode=="raw-overflow") { capture.snapshot_raw(nullptr,603,102,501,603,1);return 99; }
++        require(diagnostic_customer_duals({0,1,2,5},capture.raw)==3.0,"depot dual included in route coefficient");
++        auto f=PWLFunction::ConstantFunction(0,{0,1});auto g=PWLFunction::ConstantFunction(0.5,{0,1});
++        allocations=0;watch_allocations=true;
++        for(int i=0;i<10000;++i) {
++            goc::pwl_diag::checked_piece(f,g,0,0,"synthetic_valid");
++            capture.snapshot_raw(values,8,6,2,8,1);capture.enter(entry);capture.leave(3,true,0);
++        }
++        watch_allocations=false;require(allocations==0,"diagnostic allocated on valid scalar path");
++        std::bitset<102> a,b;for(int i:{1,2,3})a.set(i);for(int i:{2,3,4})b.set(i);
++        PricingProblem query;query.P.assign(values,values+6);query.S={b};query.sigma={2e-5};
++        auto record=diagnostic_raw_query(capture.raw,{a,b},query);
++        require(record["raw_master"]["dual_bits"][6]==goc::pwl_diag::bits(1e-6),"small raw cut dual lost");
++        require(record["native_query"]["raw_cut_indices"]==nlohmann::json::array({1}),"wrong f2 filter");
++        if(mode=="filter-mismatch") {query.S={a,b};query.sigma={1e-6,2e-5};diagnostic_raw_query(capture.raw,{a,b},query);return 99;}
++        require(mode=="sequence","unknown mode");
++        record["schema"]="ms58-f2-terminal-pricing/v1";record["kind"]="synthetic_context_gate";
++        record["entry_resets_preserved"]=true;record["no_capture_before_bcp_return"]=true;
++        record["valid_path_diagnostic_allocations"]=allocations;record["customer_dual_sum"]=3.0;
++        goc::pwl_diag::write_exclusive(record);
++        std::cout<<"PASS synthetic call sequence/raw dual/filter/depot/zero-allocation gates"<<std::endl;
++        return 0;
++    } catch(const goc::pwl_diag::Error& e) {std::cerr<<"DIAGNOSTIC "<<e.code<<" "<<e.what()<<std::endl;return e.code;}
++}
+diff --git a/diagnostic/tests/reference_valid.cpp b/diagnostic/tests/reference_valid.cpp
+new file mode 100644
+index 0000000..4e9157e
+--- /dev/null
++++ b/diagnostic/tests/reference_valid.cpp
+@@ -0,0 +1,19 @@
++#include "goc/math/pwl_function.h"
++#include <cstdint>
++#include <cstring>
++#include <iostream>
++#include <string>
++std::uint64_t bits(double value) {std::uint64_t result;std::memcpy(&result,&value,8);return result;}
++int main(int argc,char** argv) {
++    if(argc!=2)return 2;const std::string mode=argv[1];
++    const auto f=goc::PWLFunction::ConstantFunction(0.0,{0,1});
++    const auto g=mode=="numeric-valid-overlap"?goc::PWLFunction::ConstantFunction(0.5,{0,1}):
++        mode=="numeric-valid-increasing"?goc::PWLFunction({goc::LinearFunction({0,0},{2,1})}):
++        goc::PWLFunction({goc::LinearFunction({0,1},{1,0})});
++    const auto r=f.Compose(g);nlohmann::json pieces=nlohmann::json::array();
++    for(const auto& p:r.Pieces())pieces.push_back({{"domain_bits",{bits(p.domain.left),bits(p.domain.right)}},
++        {"image_bits",{bits(p.image.left),bits(p.image.right)}},{"slope_bits",bits(p.slope)},{"intercept_bits",bits(p.intercept)}});
++    std::cout<<nlohmann::json({{"encoding","f2-legacy-scalar-binary64-uint64"},
++        {"cached_domain_bits",{bits(r.Domain().left),bits(r.Domain().right)}},
++        {"cached_image_bits",{bits(r.Image().left),bits(r.Image().right)}},{"piece_count",r.PieceCount()},{"pieces",pieces}})<<std::endl;
++}

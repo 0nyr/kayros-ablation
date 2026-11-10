@@ -1,0 +1,848 @@
+diff --git a/cpp/lera/CMakeLists.txt b/cpp/lera/CMakeLists.txt
+index 53f18f9..8b04862 100644
+--- a/cpp/lera/CMakeLists.txt
++++ b/cpp/lera/CMakeLists.txt
+@@ -44,6 +44,18 @@ add_library(lera STATIC ${LERA_GOC_SOURCES} ${LERA_NYR_SOURCES} ${LERA_MAIN_SOUR
+ 
+ # kayros' C++23 baseline; the vendored code predates it (upstream used C++26
+ # permissively, but nothing needs it — 23 keeps GCC 13 toolchains buildable).
++option(KAYROS_PACKED_ORDINARY_FILTER "Compile experimental packed ordinary-filter candidate" OFF)
++option(KAYROS_PACKED_ORDINARY_FILTER_METRICS "Record packed-filter native diagnostics (perturbs timings)" OFF)
++if(KAYROS_PACKED_ORDINARY_FILTER)
++    target_compile_definitions(lera PUBLIC KAYROS_PACKED_ORDINARY_FILTER=1)
++endif()
++if(KAYROS_PACKED_ORDINARY_FILTER_METRICS)
++    if(NOT KAYROS_PACKED_ORDINARY_FILTER)
++        message(FATAL_ERROR "Packed metrics require KAYROS_PACKED_ORDINARY_FILTER=ON")
++    endif()
++    target_compile_definitions(lera PUBLIC KAYROS_PACKED_ORDINARY_FILTER_METRICS=1)
++endif()
++
+ target_compile_features(lera PUBLIC cxx_std_23)
+ set_target_properties(lera PROPERTIES POSITION_INDEPENDENT_CODE ON)
+ # Same bit-identical arithmetic policy as kayros' _core.
+diff --git a/cpp/lera/bridge/lera_bridge.cpp b/cpp/lera/bridge/lera_bridge.cpp
+index ffebe52..c6b353c 100644
+--- a/cpp/lera/bridge/lera_bridge.cpp
++++ b/cpp/lera/bridge/lera_bridge.cpp
+@@ -393,6 +393,15 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     result["effective_algorithm_settings"] = {{"cut_limit", params.cut_limit}, {"cut_violation_threshold", 0.1}, {"algorithm_epsilon", 1e-6}, {"solution_limit", params.solution_limit}, {"node_limit", params.node_limit}, {"stab_alpha", params.stab_alpha}, {"ng_routes", false}};
+     result["effective_algorithm_settings"]["label_correction"] = lbl.correcting;
+     result["effective_algorithm_settings"]["lazy_extension"] = lbl.lazy_extension;
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++    result["effective_algorithm_settings"]["packed_ordinary_filter_compiled"] = true;
++    result["effective_algorithm_settings"]["packed_ordinary_filter_threshold"] = solver::PackedOrdinaryFilter::Threshold;
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++    result["effective_algorithm_settings"]["packed_ordinary_filter_metrics"] = true;
++#else
++    result["effective_algorithm_settings"]["packed_ordinary_filter_metrics"] = false;
++#endif
++#endif
+     result["exact_log"] = log;
+     result["bound_events"] = bound_events;
+     result["closure_census"] = closure_census();
+diff --git a/cpp/lera/main/include/labeling/monodirectional_labeling.h b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+index 0cc5b86..7910aa6 100644
+--- a/cpp/lera/main/include/labeling/monodirectional_labeling.h
++++ b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+@@ -17,6 +17,9 @@
+ #include "lazy_label.h"
+ #include "bcp/pricing_problem.h"
+ #include "ng_neighborhoods.h"
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++#include "packed_ordinary_filter.h"
++#endif
+ 
+ namespace solver
+ {
+@@ -31,6 +34,11 @@ typedef std::priority_queue<LazyLabel, std::vector<LazyLabel>, LabelExtensionCom
+ class MonodirectionalLabeling
+ {
+ public:
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++    // Experimental hypothesis switches for native differential fixtures.
++    bool packed_ordinary_filter_enabled = true;
++    void InvalidatePackedOrdinaryFilter() { packed_ordinary_filter_.Clear(); }
++#endif
+ 	int process_limit; // Maximum number of labels to process for each run.
+ 	goc::Duration time_limit; // Maximum execution time.
+ 	nyr::TimeUnit t_m; // Only extend labels that have min(rw(.)) <= t_m.
+@@ -76,6 +84,10 @@ public:
+ private:
+ 	friend class BidirectionalLabeling;
+ 	friend struct CorrectionInvariantTest;
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++	friend struct PackedFilterTest;
++	mutable PackedOrdinaryFilter packed_ordinary_filter_;
++#endif
+ 	// Removed labels can remain parents of queued or processed labels.
+ 	// Retain their ownership until the whole pricing call is cleaned.
+ 	std::vector<Label*> retired_labels_;
+diff --git a/cpp/lera/main/include/labeling/packed_ordinary_filter.h b/cpp/lera/main/include/labeling/packed_ordinary_filter.h
+new file mode 100644
+index 0000000..315c78c
+--- /dev/null
++++ b/cpp/lera/main/include/labeling/packed_ordinary_filter.h
+@@ -0,0 +1,210 @@
++#pragma once
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++#include <bit>
++#include <cstdint>
++#include <map>
++#include <new>
++#include <vector>
++#include "label.h"
++
++namespace solver {
++class PackedOrdinaryFilter {
++public:
++    struct Row { nyr::VertexSet U; double min_cost; };
++    using Key = std::pair<goc::Vertex, nyr::CapacityUnit>;
++    static constexpr size_t Threshold = 64;
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++    struct Statistics {
++        uint64_t rows_built = 0, rebuilds = 0, insertions = 0, erasures = 0, value_refreshes = 0;
++        uint64_t insertion_shift_bytes = 0, erasure_shift_bytes = 0, growth_events = 0, growth_prior_payload_bytes = 0;
++        uint64_t invalidations = 0, size_mismatches = 0, allocation_failures = 0;
++        uint64_t packed_queries = 0, scalar_queries = 0, packed_visits = 0, packed_u_tests = 0, packed_survivor_dereferences = 0;
++        uint64_t current_live_rows = 0, current_capacity_rows = 0, peak_live_rows = 0, peak_capacity_rows = 0, current_buckets = 0;
++    };
++    struct BucketTrace {
++        Key key;
++        bool packed;
++        std::vector<size_t> visits, u_tests, survivors;
++        size_t cost_break = static_cast<size_t>(-1);
++        bool operator==(const BucketTrace&) const = default;
++    };
++    mutable Statistics statistics;
++    mutable std::vector<BucketTrace> trace;
++    mutable bool fail_next_optional_allocation = false;
++#endif
++private:
++    struct Bucket { std::vector<Row> rows; bool valid = false; };
++    mutable std::map<Key, Bucket> buckets_;
++    mutable bool allocation_disabled_ = false;
++    void Memory() const {
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        uint64_t live = 0, capacity = 0;
++        for (const auto& entry : buckets_) { live += entry.second.rows.size(); capacity += entry.second.rows.capacity(); }
++        statistics.current_live_rows = live; statistics.current_capacity_rows = capacity;
++        statistics.peak_live_rows = std::max(statistics.peak_live_rows, live);
++        statistics.peak_capacity_rows = std::max(statistics.peak_capacity_rows, capacity);
++        statistics.current_buckets = buckets_.size();
++#endif
++    }
++    void FailedAllocation() const noexcept {
++        buckets_.clear(); allocation_disabled_ = true;
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        ++statistics.allocation_failures;
++        statistics.current_live_rows = statistics.current_capacity_rows = statistics.current_buckets = 0;
++#endif
++    }
++    void Invalidate(Bucket& bucket) const {
++        bucket.valid = false; bucket.rows.clear();
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        ++statistics.invalidations;
++#endif
++        Memory();
++    }
++    bool Shape(Bucket& bucket, size_t expected) const {
++        if (bucket.rows.size() == expected) return true;
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        ++statistics.size_mismatches;
++#endif
++        Invalidate(bucket); return false;
++    }
++    void MaybeFailForFixture() const {
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        if (fail_next_optional_allocation) { fail_next_optional_allocation = false; throw std::bad_alloc(); }
++#endif
++    }
++    void Build(Bucket& bucket, const std::vector<Label*>& labels) const {
++        MaybeFailForFixture();
++        bucket.valid = false;
++        std::vector<Row> complete;
++        complete.reserve(labels.size());
++        for (const Label* label : labels) complete.push_back({label->U, label->min_cost});
++        bucket.rows.swap(complete);
++        bucket.valid = true; // Publish only a complete copy in current order.
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        ++statistics.rebuilds; statistics.rows_built += labels.size();
++#endif
++        Memory();
++    }
++public:
++    // Metadata owns values only. Allocation failure never rolls back an
++    // already successful algorithm mutation and disables rebuilding until Clean.
++    void Clear() noexcept {
++        buckets_.clear(); allocation_disabled_ = false;
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        fail_next_optional_allocation = false;
++#endif
++        Memory();
++    }
++    bool AllocationDisabled() const { return allocation_disabled_; }
++    void Insert(goc::Vertex vertex, nyr::CapacityUnit demand, size_t index,
++                const std::vector<Label*>& labels, bool create) noexcept {
++        if (allocation_disabled_) return;
++        const Key key{vertex, demand};
++        try {
++            auto it = buckets_.find(key);
++            if (it == buckets_.end()) {
++                if (!create) return;
++                MaybeFailForFixture();
++                it = buckets_.try_emplace(key).first;
++                Build(it->second, labels); return;
++            }
++            auto& bucket = it->second;
++            if (!bucket.valid) { if (create) Build(bucket, labels); return; }
++            if (labels.empty() || index >= labels.size()) { Invalidate(bucket); return; }
++            if (!Shape(bucket, labels.size() - 1)) return;
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++            const auto previous_capacity = bucket.rows.capacity();
++            const auto previous_size = bucket.rows.size();
++#endif
++            MaybeFailForFixture();
++            bucket.rows.insert(bucket.rows.begin() + index, {labels[index]->U, labels[index]->min_cost});
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++            ++statistics.insertions;
++            statistics.insertion_shift_bytes += (previous_size - index) * sizeof(Row);
++            if (bucket.rows.capacity() != previous_capacity) {
++                ++statistics.growth_events; statistics.growth_prior_payload_bytes += previous_size * sizeof(Row);
++            }
++#endif
++            Memory();
++        } catch (const std::bad_alloc&) { FailedAllocation(); }
++    }
++    void Refresh(goc::Vertex vertex, nyr::CapacityUnit demand, size_t index,
++                 size_t size, double value) noexcept {
++        auto it = buckets_.find({vertex, demand});
++        if (it == buckets_.end() || !it->second.valid) return;
++        auto& bucket = it->second;
++        if (!Shape(bucket, size)) return;
++        if (index >= size) { Invalidate(bucket); return; }
++        bucket.rows[index].min_cost = value; // Copy even equal values and signed zero.
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        ++statistics.value_refreshes;
++#endif
++    }
++    void Erase(goc::Vertex vertex, nyr::CapacityUnit demand, size_t index, size_t size) noexcept {
++        auto it = buckets_.find({vertex, demand});
++        if (it == buckets_.end() || !it->second.valid) return;
++        auto& bucket = it->second;
++        if (!Shape(bucket, size)) return;
++        if (index >= size) { Invalidate(bucket); return; }
++        bucket.rows.erase(bucket.rows.begin() + index);
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        ++statistics.erasures; statistics.erasure_shift_bytes += (size - index - 1) * sizeof(Row);
++#endif
++        Memory();
++    }
++    void Invalidate(goc::Vertex vertex, nyr::CapacityUnit demand) noexcept {
++        auto it = buckets_.find({vertex, demand});
++        if (it != buckets_.end()) Invalidate(it->second);
++    }
++    const std::vector<Row>* Rows(goc::Vertex vertex, nyr::CapacityUnit demand,
++                                 const std::vector<Label*>& labels) const noexcept {
++        if (allocation_disabled_) return nullptr;
++        auto it = buckets_.find({vertex, demand});
++        if (it == buckets_.end()) return nullptr; // Absent sidecars retain scalar fallback.
++        auto& bucket = it->second;
++        if (bucket.valid && !Shape(bucket, labels.size())) return nullptr;
++        if (!bucket.valid) {
++            try { Build(bucket, labels); } catch (const std::bad_alloc&) { FailedAllocation(); return nullptr; }
++        }
++        return &bucket.rows;
++    }
++    bool Verify(goc::Vertex vertex, nyr::CapacityUnit demand, const std::vector<Label*>& labels) const {
++        auto it = buckets_.find({vertex, demand});
++        if (it == buckets_.end() || !it->second.valid) return true;
++        if (it->second.rows.size() != labels.size()) return false;
++        for (size_t i = 0; i < labels.size(); ++i)
++            if (it->second.rows[i].U != labels[i]->U || std::bit_cast<uint64_t>(it->second.rows[i].min_cost) !=
++                std::bit_cast<uint64_t>(labels[i]->min_cost)) return false;
++        return true;
++    }
++    void BeginQuery() const {
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        trace.clear();
++#endif
++    }
++    void BeginBucket(goc::Vertex vertex, nyr::CapacityUnit demand, bool packed) const {
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        trace.push_back({{vertex, demand}, packed, {}, {}, {}});
++        if (packed) ++statistics.packed_queries; else ++statistics.scalar_queries;
++#endif
++    }
++    void Visit(size_t index, bool packed) const {
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        trace.back().visits.push_back(index); if (packed) ++statistics.packed_visits;
++#endif
++    }
++    void CostBreak(size_t index) const {
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        trace.back().cost_break = index;
++#endif
++    }
++    void Subset(size_t index, bool packed, bool passed) const {
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++        trace.back().u_tests.push_back(index);
++        if (passed) trace.back().survivors.push_back(index);
++        if (packed) { ++statistics.packed_u_tests; if (passed) ++statistics.packed_survivor_dereferences; }
++#endif
++    }
++};
++} // namespace solver
++#endif
+diff --git a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+index 6714d11..f883a9a 100644
+--- a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+@@ -424,6 +424,9 @@ Label* MonodirectionalLabeling::ExtensionStep(const LazyLabel& ll) const
+ 
+ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ {
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++	packed_ordinary_filter_.BeginQuery();
++#endif
+ 	// If full route, then it is dominated if the reduced cost is bigger than or equal to zero.
+ 	if (l->v == vrp_.d) return epsilon_bigger_equal(l->min_cost, 0.0);
+ 	
+@@ -435,11 +438,45 @@ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ 	for (auto& demand_entry : U[l->v])
+ 	{
+ 		if (epsilon_bigger(demand_entry.first, l->q)) break;
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++		const auto* packed_rows = packed_ordinary_filter_enabled && partial && sort_by_cost && !elementary_check_relaxation
++			&& demand_entry.second.size() >= PackedOrdinaryFilter::Threshold
++			? packed_ordinary_filter_.Rows(l->v, demand_entry.first, demand_entry.second) : nullptr;
++		packed_ordinary_filter_.BeginBucket(l->v, demand_entry.first, packed_rows != nullptr);
++		for (size_t packed_index = 0; packed_index < demand_entry.second.size(); ++packed_index)
++		{
++			Label* m;
++			packed_ordinary_filter_.Visit(packed_index, packed_rows != nullptr);
++			if (packed_rows)
++			{
++#ifndef NDEBUG
++				assert(packed_ordinary_filter_.Verify(l->v, demand_entry.first, demand_entry.second));
++#endif
++				const auto& row = (*packed_rows)[packed_index];
++				if (epsilon_bigger(row.min_cost, l_beta)) { packed_ordinary_filter_.CostBreak(packed_index); break; }
++				const bool subset_passed = is_subset(row.U, l->U);
++				packed_ordinary_filter_.Subset(packed_index, true, subset_passed);
++				if (!subset_passed) continue;
++				m = demand_entry.second[packed_index];
++			}
++			else
++			{
++				m = demand_entry.second[packed_index];
++				if (sort_by_cost && epsilon_bigger(alpha(m, partial), l_beta)) { packed_ordinary_filter_.CostBreak(packed_index); break; }
++				if (!elementary_check_relaxation)
++				{
++					const bool subset_passed = is_subset(m->U, l->U);
++					packed_ordinary_filter_.Subset(packed_index, false, subset_passed);
++					if (!subset_passed) continue;
++				}
++			}
++#else
+ 		for (auto& m: demand_entry.second)
+ 		{
+ 			// We know that q(m) <= q(l), v(m) = v(l).
+ 			if (sort_by_cost && epsilon_bigger(alpha(m, partial), l_beta)) break;
+ 			if (!elementary_check_relaxation && !is_subset(m->U, l->U)) continue;
++#endif
+ 			
+ 			if (!cost_check_relaxation)
+ 			{
+@@ -508,12 +545,20 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 					l->duration = normalize_pwl((PWLFunction) Delta); // kayros (M5.7)
+ 					l->rw = l->duration.Domain();
+ 					l->min_cost = min(img(l->duration)) - l->p - l->cut_cost;
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++					packed_ordinary_filter_.Refresh(m->v, demand_entry.first, j, demand_entry.second.size(), l->min_cost);
++#endif
++
+ 					changed_cost |= l->min_cost != previous_cost;
+ 				}
+ 				if ((!partial && Delta.IsAlwaysDominated(m->duration, theta)) || (partial && l->duration.Empty()))
+ 				{
+ 					// If l is fully dominated, remove.
+ 					retired_labels_.push_back(l);
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++					packed_ordinary_filter_.Erase(m->v, demand_entry.first, j, demand_entry.second.size());
++#endif
++
+ 					demand_entry.second.erase(demand_entry.second.begin()+j);
+ 					--j;
+ 					++removed;
+@@ -526,6 +571,9 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 			if (sort_by_cost)
+ 				std::stable_sort(demand_entry.second.begin(), demand_entry.second.end(),
+ 					[&](Label* a, Label* b) { return alpha(a, partial) < alpha(b, partial); });
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++			if (sort_by_cost) packed_ordinary_filter_.Invalidate(m->v, demand_entry.first);
++#endif
+ 			corrected_merge_buckets_.emplace_back(m->v, demand_entry.first);
+ 		}
+ 	}
+@@ -535,8 +583,23 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ void MonodirectionalLabeling::ProcessStep(Label* l)
+ {
+ 	// (If domination structure) insert label l into the dominance structure U.
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++	const auto packed_demand = floor(l->q);
++	auto& packed_labels = U[l->v].Insert(packed_demand, {});
++	size_t packed_index;
++	if (sort_by_cost)
++	{
++		auto inserted = insert_sorted(packed_labels, l, [&](Label* l1, Label* l2) { return alpha(l1, partial) < alpha(l2, partial); });
++		packed_index = inserted - packed_labels.begin();
++	}
++	else { packed_index = packed_labels.size(); packed_labels.push_back(l); }
++	packed_ordinary_filter_.Insert(l->v, packed_demand, packed_index, packed_labels,
++		packed_ordinary_filter_enabled && partial && sort_by_cost && !elementary_check_relaxation
++		&& packed_labels.size() >= PackedOrdinaryFilter::Threshold);
++#else
+ 	if (sort_by_cost) insert_sorted(U[l->v].Insert(floor(l->q), {}), l, [&](Label* l1, Label* l2) { return alpha(l1, partial) < alpha(l2, partial); });
+ 	else U[l->v].Insert(floor(l->q), {}).push_back(l); // else, just push it to the end of the list.
++#endif
+ }
+ 
+ vector<LazyLabel> MonodirectionalLabeling::EnumerationStep(Label* l) const
+@@ -568,6 +631,10 @@ vector<LazyLabel> MonodirectionalLabeling::EnumerationStep(Label* l) const
+ 
+ void MonodirectionalLabeling::Clean()
+ {
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++	packed_ordinary_filter_.Clear();
++#endif
++
+ 	processed_count = 0;
+ 	for (auto& entry: U)
+ 		for (auto& entry_2: entry)
+diff --git a/docs/WIP-packed-ordinary-filter-handoff.md b/docs/WIP-packed-ordinary-filter-handoff.md
+new file mode 100644
+index 0000000..10cfd22
+--- /dev/null
++++ b/docs/WIP-packed-ordinary-filter-handoff.md
+@@ -0,0 +1,63 @@
++# WIP packed ordinary filter checkpoint
++
++This is an experimental, unvalidated hypothesis branch from exact selected9d `9d64b7c53ddaea7a578d247ebd28db43ae0d4e56`. Work stopped at Onyr's request. The implementation is not ready for routing experiments, promotion or performance interpretation. No remote action, reservation or routing run was performed. Existing a2dc/7d profiler worktrees, artifacts and frozen helpers were not edited.
++
++The branch is `proof-speed/packed-ordinary-filter`, in `$WORKSPACE/kayros-proof-packed-ordinary-filter`. The implementation contract is `kayros-ablation/outputs/ms58/dabia-20261110/u-filter-opportunity-gros-v1/analysis/dominance-index-20261110T113021Z/assessment.md`. Astra reviewed the design and supplied allocation-failure, ABI and maintenance requirements. Actual source/fixture review by `dominance_index_astra` remains pending.
++
++## Current implementation
++
++The default-OFF public CMake flag `KAYROS_PACKED_ORDINARY_FILTER` enables a sidecar keyed by `(vertex, existing demand key)`. Rows own copied `VertexSet U` and `double min_cost`, with no label or relocating bucket pointers. The initial threshold is 64. Ordinary queries use rows only with partial dominance, cost sorting and unrelaxed U checks. Missing metadata retains scalar fallback. Eligible processed insertion creates a cache. An existing invalid cache can rebuild lazily on a later eligible query.
++
++Sorted insertion captures the iterator from the original `insert_sorted` and mirrors its exact position. Fallback-mode insertions and retirements maintain any valid cache. Partial correction refreshes the copied double immediately and unconditionally after recomputation, including equal values and signed zero. Retirement erases the matching row before the original pointer erase. The existing correction stable sort invalidates row order. Cleanup and `SetProblem` clear metadata. The survivor theta/PWL/trace body remains shared and unchanged.
++
++The packed loop evaluates the same epsilon cost predicate before the same subset predicate, then loads the label pointer for survivors. Label ownership and ILS source are untouched. Optional cache allocations catch only `std::bad_alloc`, discard all metadata and suppress rebuilding until `Clean`. A diagnostic allocation-failure injector exists only with the separate metrics flag.
++
++`KAYROS_PACKED_ORDINARY_FILTER_METRICS` is separately default OFF and PUBLIC. It records logical insertion/erasure shift bytes, rows built, refreshes, aggregate live/capacity payload and peaks, allocation failures, query visits, subset tests and survivor dereferences. It also records native query traces. This mode perturbs timings and is unsuitable for performance measurements. Container/node overhead and allocator traffic are not measured. Debug builds additionally verify rows and must not be used for timing.
++
++## Completed checks
++
++- C++23 syntax checks of candidate monodirectional and bidirectional sources passed in the project Nix shell.
++- An isolated candidate CPLEX metrics build completed `lera`, `_lera` and `_core`.
++- A separate baseline source archive of exact9d was extracted under the candidate's ignored `build/packed-base-source`, and its isolated CPLEX build completed the same targets. The selected9d worktree was not used as a build directory or edited.
++- Candidate flag-OFF preprocessing matched exact9d for the 7 checked source/header streams, including the bridge. Log `/tmp/packed-off-equivalence.log` contains token hashes.
++- Local baseline and candidate `_core` binaries have the same SHA-256, `da8a6d475579c6ab403f51d74b054bebd8be628ce7614d105396c1d8a1c02e4b`.
++- `git diff --check` passed at checkpoint.
++
++## Known failure and validation status
++
++The newly written full-state native fixture did not compile in either matching build. Both compilers report `tests/cpp/test_packed_ordinary_filter.cpp:76:18: error: 'min' was not declared in this scope`. The immediate likely correction is qualifying the existing interval minimum call as `std::min(img(l.duration))`, matching the original correction fixture. This was deliberately left unfixed because work was stopped. No fixture assertions have run and no state digest or semantic equivalence has been established.
++
++The fixture source is intended to compare paired scalar-disabled and packed-enabled contexts and to serialize semantic state across separately built baseline/candidate executables. It includes both arithmetic modes, threshold growth, equal/epsilon costs, VectorMap relocation, flag changes, full and partial correction, scalar points, CHOICE pieces, holes, nonzero cut resources, stable-sort repair, signed-zero refresh, manual start/middle/last retirement, cleanup/reuse and simulated optional-allocation failure. These are intended cases, not passed coverage. Fixture logic itself needs review and may expose further defects after the compile error is corrected.
++
++The candidate library was rebuilt after the final header/layout changes. Original correction/ownership/negative-route/deferred-parent fixtures, pricing-oracle fixtures, metrics-OFF enabled build, and reserved-node gates remain pending. No performance claim is supported. Correction block filtering is separate and absent from this branch.
++
++## Exact local commands
++
++Run from this worktree in the project shell. These commands are a resume recipe and were not rerun after the stop request.
++
++```bash
++nix develop ./nix-dev
++
++cmake -S . -B build/packed-metrics-cplex -DCMAKE_BUILD_TYPE=Release -DLERA_LP_BACKEND=cplex -DKAYROS_PACKED_ORDINARY_FILTER=ON -DKAYROS_PACKED_ORDINARY_FILTER_METRICS=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -Dpybind11_DIR=$WORKSPACE/kayros/.venv/lib/python3.13/site-packages/pybind11/share/cmake/pybind11
++cmake --build build/packed-metrics-cplex --target _lera _core -j 3
++
++cmake -S build/packed-base-source -B build/packed-base-cplex -DCMAKE_BUILD_TYPE=Release -DLERA_LP_BACKEND=cplex -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -Dpybind11_DIR=$WORKSPACE/kayros/.venv/lib/python3.13/site-packages/pybind11/share/cmake/pybind11
++cmake --build build/packed-base-cplex --target _lera _core -j 3
++
++COMMON=(-std=c++23 -O2 -DNDEBUG -ffp-contract=off)
++INCLUDES=(-Icpp/lera/main/include -Icpp/lera/goc/include -Icpp/lera/nyr/include -Icpp/lera/magic_enum/include -isystem "$BOOST_INCLUDE")
++g++ "${COMMON[@]}" -DKAYROS_PACKED_ORDINARY_FILTER=1 -DKAYROS_PACKED_ORDINARY_FILTER_METRICS=1 "${INCLUDES[@]}" tests/cpp/test_packed_ordinary_filter.cpp build/packed-metrics-cplex/cpp/lera/liblera.a -L"$BOOST_BIN" -lboost_graph -ldl -lm -o build/packed/test_packed_filter_on
++build/packed/test_packed_filter_on
++
++BASE_INCLUDES=(-Ibuild/packed-base-source/cpp/lera/main/include -Ibuild/packed-base-source/cpp/lera/goc/include -Ibuild/packed-base-source/cpp/lera/nyr/include -Ibuild/packed-base-source/cpp/lera/magic_enum/include -isystem "$BOOST_INCLUDE")
++g++ "${COMMON[@]}" "${BASE_INCLUDES[@]}" tests/cpp/test_packed_ordinary_filter.cpp build/packed-base-cplex/cpp/lera/liblera.a -L"$BOOST_BIN" -lboost_graph -ldl -lm -o build/packed/test_packed_filter_base
++build/packed/test_packed_filter_base
++
++python tests/cpp/check_packed_ordinary_filter_off.py
++```
++
++Do not compile baseline fixtures against candidate headers or link them to a mismatched class layout. The baseline and candidate include arrays above are deliberately different. Compare complete serialized semantic state/digests only after both executables pass their own checks.
++
++## Next steps
++
++Fix and review the native fixture compile error, run it against the matching libraries, investigate any state/trace mismatches, and obtain Astra's actual source review. Verify the intended edge cases explicitly, especially absent/invalid cache fallback, same-size public-U invalidation, signed-zero refresh, allocation failure after mandatory insertion, flag changes and full-only retirement with nonempty duration. Rerun the existing correction ownership/deferred-parent/merge-order and pricing fixtures without weakening assertions. Build an enabled metrics-OFF candidate before any future timing work and retain the `_core` hash check. Only after these gates should root prepare separate G5K native validation or matched routing pilots with exact9d and fixed minimalLera controls.
+diff --git a/tests/cpp/check_packed_ordinary_filter_off.py b/tests/cpp/check_packed_ordinary_filter_off.py
+new file mode 100644
+index 0000000..5b21c85
+--- /dev/null
++++ b/tests/cpp/check_packed_ordinary_filter_off.py
+@@ -0,0 +1,63 @@
++"""Check packed flag OFF against exact selected9d source and layout tokens."""
++from __future__ import annotations
++
++import hashlib
++import io
++import json
++import os
++from pathlib import Path
++import re
++import subprocess
++import tarfile
++import tempfile
++
++BASE = "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56"
++ROOT = Path(__file__).resolve().parents[2]
++SOURCES = [
++    "cpp/lera/bridge/lera_bridge.cpp",
++    "cpp/lera/main/src/labeling/monodirectional_labeling.cpp",
++    "cpp/lera/main/src/labeling/bidirectional_labeling.cpp",
++    "cpp/lera/main/src/labeling/pwl_domination_function.cpp",
++    "cpp/lera/main/include/labeling/bidirectional_labeling.h",
++    "cpp/lera/main/include/labeling/monodirectional_labeling.h",
++    "cpp/lera/main/include/labeling/pwl_domination_function.h",
++]
++# Keep quoted literals intact, including their internal whitespace. The input
++# has already been preprocessed, so comments and directives are absent.
++TOKEN = re.compile(
++    r'(?:u8|u|U|L)?R"(?P<delimiter>[^ ()\\\t\r\n]{0,16})\(.*?\)(?P=delimiter)"'
++    r'|(?:u8|u|U|L)?"(?:\\.|[^"\\])*"'
++    r"|(?:u8|u|U|L)?'(?:\\.|[^'\\])*'"
++    r'|[A-Za-z_$][A-Za-z_0-9$]*'
++    r'|(?:\d|\.\d)(?:[eEpP][+-]|[A-Za-z_0-9.])*'
++    r'|%:%:|<=>|>>=|<<=|->\*|\.\.\.|##|::|\.\*|->|\+\+|--|<<|>>|<=|>=|==|!='
++    r'|&&|\|\||\*=|/=|%=|\+=|-=|&=|\^=|\|=|<:|:>|<%|%>|%:|[^\s]',
++    re.DOTALL,
++)
++
++
++def tokens(tree: Path, source: str) -> bytes:
++    command = ["g++", "-std=c++23", "-E", "-P", "-w", "-x", "c++",
++               "-Icpp", "-Icpp/lera/main/include", "-Icpp/lera/goc/include",
++               "-Icpp/lera/nyr/include", "-Icpp/lera/magic_enum/include"]
++    if os.environ.get("BOOST_INCLUDE"):
++        command += ["-isystem", os.environ["BOOST_INCLUDE"]]
++    command.append(source)
++    result = subprocess.run(command, cwd=tree, check=True, capture_output=True, text=True)
++    return "\0".join(match.group() for match in TOKEN.finditer(result.stdout)).encode()
++
++
++with tempfile.TemporaryDirectory(prefix="kayros-dominance-off-") as temporary:
++    base_tree = Path(temporary)
++    archive = subprocess.run(["git", "archive", BASE], cwd=ROOT, check=True, capture_output=True).stdout
++    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
++        tar.extractall(base_tree, filter="data")
++    results = []
++    for source in SOURCES:
++        original, derivative = tokens(base_tree, source), tokens(ROOT, source)
++        if original != derivative:
++            raise AssertionError(f"OFF preprocessing differs for {source}")
++        results.append({"source": source, "token_sha256": hashlib.sha256(original).hexdigest(),
++                        "token_bytes": len(original), "equivalent": True})
++    print(json.dumps({"base": BASE, "definition": "KAYROS_PACKED_ORDINARY_FILTER and METRICS absent",
++                      "checks": results}, indent=2))
+diff --git a/tests/cpp/test_packed_ordinary_filter.cpp b/tests/cpp/test_packed_ordinary_filter.cpp
+new file mode 100644
+index 0000000..6a142b8
+--- /dev/null
++++ b/tests/cpp/test_packed_ordinary_filter.cpp
+@@ -0,0 +1,282 @@
++#include <goc/goc.h>
++#include <nyr/nyr.h>
++#include "labeling/bidirectional_labeling.h"
++#include <bit>
++#include <cstdint>
++#include <iostream>
++#include <map>
++#include <optional>
++#include <random>
++#include <sstream>
++#include <stdexcept>
++#include <string>
++
++using namespace goc;
++using namespace nyr;
++using namespace solver;
++namespace solver {
++struct CorrectionInvariantTest {
++    static MonodirectionalLabeling& Mono(BidirectionalLabeling& b) { return b.lbl_[0]; }
++    static void Process(MonodirectionalLabeling& m, Label* l) { m.ProcessStep(l); }
++    static bool Dominated(MonodirectionalLabeling& m, Label* l) { return m.DominationStep(l); }
++    static int Correct(MonodirectionalLabeling& m, Label* l) { return m.CorrectionStep(l); }
++    static void Clean(MonodirectionalLabeling& m) { m.Clean(); }
++    static auto& Retired(MonodirectionalLabeling& m) { return m.retired_labels_; }
++    static auto& Dirty(MonodirectionalLabeling& m) { return m.corrected_merge_buckets_; }
++    static void Configure(MonodirectionalLabeling& m) { m.pp_.P.assign(5, 0); m.pp_.sigma = {.125, -.375, .5}; }
++    static void RetireAt(MonodirectionalLabeling& m, int vertex, double demand, size_t index) {
++        auto& labels = m.U[vertex].Insert(demand, {});
++        m.retired_labels_.push_back(labels[index]);
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++        m.packed_ordinary_filter_.Erase(vertex, demand, index, labels.size());
++#endif
++        labels.erase(labels.begin() + index);
++    }
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++    static auto& Index(MonodirectionalLabeling& m) { return m.packed_ordinary_filter_; }
++#endif
++};
++}
++namespace {
++void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
++VRPInstance instance() {
++    VRPInstance vrp;
++    vrp.D = Digraph(5); vrp.o = 0; vrp.d = 4; vrp.T = 20; vrp.horizon = {0., 20.}; vrp.Q = 1000;
++    vrp.q.assign(5, 0.); vrp.tw.assign(5, {0., 20.});
++    vrp.tau = Matrix<PWLFunction>(5, 5); vrp.pretau = Matrix<PWLFunction>(5, 5);
++    vrp.arr = Matrix<PWLFunction>(5, 5); vrp.dep = Matrix<PWLFunction>(5, 5); vrp.LDT = Matrix<double>(5, 5);
++    vrp.tau[0][0] = PWLFunction::ConstantFunction(0., {0., 20.}); return vrp;
++}
++PWLFunction function(int kind, double value) {
++    PWLFunction f;
++    switch (kind % 6) {
++    case 0: return PWLFunction::ConstantFunction(value, {0., 10.});
++    case 1: f.AddPiece(LinearFunction({0., value}, {10., value + 5.})); break;
++    case 2: f.AddPiece(LinearFunction({0., value + 4.}, {10., value})); break;
++    case 3: f.AddPiece(LinearFunction({0., value}, {3., value + 1.}));
++            f.AddPiece(LinearFunction({6., value + 2.}, {10., value + 1.})); break;
++    case 4: return PWLFunction::ConstantFunction(value, {3., 3.});
++    case 5: f.AddPiece(LinearFunction({0., value + 3.}, {0., value + 1.}).as_choice_vertical());
++            f.AddPiece(LinearFunction({0., value + 1.}, {5., value + 2.}));
++            f.AddPiece(LinearFunction({5., value + 2.}, {5., value}).as_choice_vertical());
++            f.AddPiece(LinearFunction({5., value}, {5., value + .5}).as_choice_vertical()); break;
++    }
++    return f;
++}
++Label label(int kind, double value, double demand, uint64_t mask, bool cuts) {
++    Label l;
++    l.parent = nullptr; l.v = 1; l.q = demand; l.p = cuts ? .25 : 0.; l.cut_cost = 0.; l.length = kind % 4;
++    l.S.set(0); l.U = VertexSet(mask); l.duration = function(kind, value); l.rw = l.duration.Domain();
++    l.cut_visited = cuts ? std::vector<int>{1 + kind % 3, (kind + 1) % 3, kind % 2} : std::vector<int>{0, 0, 0};
++    const double sigma[] = {.125, -.375, .5};
++    for (int i = 0; i < 3; ++i) {
++        if (l.cut_visited[i] % 2) l.cut_nz.push_back(i);
++        l.cut_cost += (l.cut_visited[i] / 2) * sigma[i];
++    }
++    l.min_cost = min(img(l.duration)) - l.p - l.cut_cost;
++    return l;
++}
++struct Context {
++    std::optional<TDNGRoutesParams> ng;
++    BidirectionalLabeling bidi;
++    std::map<const Label*, uint64_t> ids;
++    uint64_t next = 1;
++    explicit Context(bool enabled) : ng(std::nullopt), bidi(instance(), ng) {
++        auto& m = mono(); m.partial = m.sort_by_cost = true; m.elementary_check_relaxation = m.cost_check_relaxation = false;
++        CorrectionInvariantTest::Configure(m);
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++        m.packed_ordinary_filter_enabled = enabled;
++#else
++        (void)enabled;
++#endif
++    }
++    MonodirectionalLabeling& mono() { return CorrectionInvariantTest::Mono(bidi); }
++    void insert(const Label& value) {
++        auto* l = new Label(value); ids.emplace(l, next++); CorrectionInvariantTest::Process(mono(), l);
++    }
++    void clean(bool set_problem = false) {
++        if (set_problem) { PricingProblem pp; pp.P.assign(5, 0.); mono().SetProblem(pp); }
++        else CorrectionInvariantTest::Clean(mono());
++        ids.clear(); CorrectionInvariantTest::Configure(mono());
++    }
++    void verify() {
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++        for (int v = 0; v < mono().U.size(); ++v) for (const auto& demand : mono().U[v])
++            require(CorrectionInvariantTest::Index(mono()).Verify(v, demand.first, demand.second), "Cached U/min_cost/order differs");
++#endif
++    }
++};
++void integer(std::ostringstream& out, uint64_t value) { out << std::hex << value << ','; }
++void number(std::ostringstream& out, double value) { integer(out, std::bit_cast<uint64_t>(value)); }
++void record_label(std::ostringstream& out, const Label& l, const Context& c) {
++    integer(out, l.parent ? c.ids.at(l.parent) : 0); integer(out, l.v); integer(out, l.length);
++    number(out, l.q); number(out, l.p); number(out, l.cut_cost); number(out, l.min_cost);
++    number(out, l.rw.left); number(out, l.rw.right);
++    for (size_t i = 0; i < l.U.size(); ++i) { integer(out, l.U.test(i)); integer(out, l.S.test(i)); }
++    integer(out, l.cut_visited.size()); for (auto x : l.cut_visited) integer(out, x);
++    integer(out, l.cut_nz.size()); for (auto x : l.cut_nz) integer(out, x);
++    integer(out, l.duration.PieceCount());
++    for (const auto& p : l.duration.Pieces()) {
++        number(out, p.domain.left); number(out, p.domain.right); number(out, p.image.left); number(out, p.image.right);
++        number(out, p.slope); number(out, p.intercept);
++    }
++}
++std::string state(Context& c, const Label* query = nullptr, int result = -1) {
++    c.verify(); auto& m = c.mono(); std::ostringstream out;
++    integer(out, m.partial); integer(out, m.sort_by_cost); integer(out, m.elementary_check_relaxation); integer(out, m.cost_check_relaxation);
++    integer(out, result);
++    for (int v = 0; v < m.U.size(); ++v) {
++        integer(out, v);
++        for (const auto& demand : m.U[v]) {
++            number(out, demand.first); integer(out, demand.second.size());
++            for (const Label* l : demand.second) { integer(out, c.ids.at(l)); record_label(out, *l, c); }
++        }
++    }
++    integer(out, CorrectionInvariantTest::Retired(m).size());
++    for (const auto* l : CorrectionInvariantTest::Retired(m)) { integer(out, c.ids.at(l)); record_label(out, *l, c); }
++    integer(out, CorrectionInvariantTest::Dirty(m).size());
++    for (const auto& key : CorrectionInvariantTest::Dirty(m)) { integer(out, key.first); number(out, key.second); }
++    if (query) record_label(out, *query, c);
++    return out.str();
++}
++uint64_t digest = 1469598103934665603ULL, comparisons = 0;
++void same(const std::string& a, const std::string& b) {
++    require(a == b, "Full semantic state differs between scalar and packed calls");
++    for (unsigned char ch : a) { digest ^= ch; digest *= 1099511628211ULL; }
++    ++comparisons;
++}
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++void same_trace(Context& a, Context& b) {
++    const auto& x = CorrectionInvariantTest::Index(a.mono()).trace;
++    const auto& y = CorrectionInvariantTest::Index(b.mono()).trace;
++    require(x.size() == y.size(), "Query bucket trace count changed");
++    for (size_t i = 0; i < x.size(); ++i)
++        require(x[i].key == y[i].key && x[i].visits == y[i].visits && x[i].u_tests == y[i].u_tests &&
++                x[i].survivors == y[i].survivors && x[i].cost_break == y[i].cost_break,
++                "Actual cost-break or ordered survivor trace changed");
++}
++#endif
++void query(Context& a, Context& b, Label value) {
++    Label x = value, y = value;
++    const bool dx = CorrectionInvariantTest::Dominated(a.mono(), &x), dy = CorrectionInvariantTest::Dominated(b.mono(), &y);
++    same(state(a, &x, dx), state(b, &y, dy));
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++    same_trace(a, b);
++#endif
++}
++void insert(Context& a, Context& b, const Label& value, bool query_now = true) {
++    a.insert(value); b.insert(value); same(state(a), state(b));
++    if (query_now) query(a, b, label(0, 100., 7., 2, true));
++}
++void correct(Context& a, Context& b, Label value, bool query_now = true) {
++    Label x = value, y = value;
++    const int dx = CorrectionInvariantTest::Correct(a.mono(), &x), dy = CorrectionInvariantTest::Correct(b.mono(), &y);
++    same(state(a, &x, dx), state(b, &y, dy));
++    if (query_now) query(a, b, label(3, 100., 7., 2, true));
++}
++void flags(Context& a, Context& b, bool partial, bool sorted, bool elementary, bool cost) {
++    for (auto* c : {&a, &b}) {
++        auto& m = c->mono(); m.partial = partial; m.sort_by_cost = sorted;
++        m.elementary_check_relaxation = elementary; m.cost_check_relaxation = cost;
++    }
++}
++void exercise(bool exact) {
++    StepExactArithmeticScope arithmetic(exact); Context scalar(false), packed(true);
++    // Grow through the threshold with equal costs, epsilon-sized offsets and relocations.
++    for (int i = 0; i < 90; ++i) {
++        double value = 5. + (i % 4 == 0 ? 0. : i % 4 == 1 ? 0.5e-6 : i % 4 == 2 ? 1e-6 : 2e-6);
++        auto l = label(i % 6, value, 7., uint64_t(1) << (2 + i % 3), i % 3 == 0);
++        insert(scalar, packed, l);
++        if (i % 9 == 0) insert(scalar, packed, label(0, 10., 0.5 + i, 4, false), false);
++    }
++    for (double value : {4., 5., 5. + .5e-6, 5. + 1e-6, 5. + 2e-6, 100.})
++        for (uint64_t u : {uint64_t(0), uint64_t(4), uint64_t(12), ~uint64_t(0)}) query(scalar, packed, label(5, value, 7., u, true));
++    for (int mode = 0; mode < 8; ++mode) {
++        flags(scalar, packed, mode & 1, mode & 2, mode & 4, false);
++        insert(scalar, packed, label(mode, 6., 7., 4, true));
++        correct(scalar, packed, label(mode, 2., 7., 4, true));
++        query(scalar, packed, label(mode, 30., 7., 4, true));
++    }
++    flags(scalar, packed, true, true, false, false);
++    // Direct external replacement requires explicit invalidation, including same-size writes.
++    for (auto* c : {&scalar, &packed}) {
++#ifdef KAYROS_PACKED_ORDINARY_FILTER
++        c->mono().InvalidatePackedOrdinaryFilter();
++#endif
++        auto& labels = c->mono().U[1].Insert(7., {});
++        if (!labels.empty()) labels[0]->U.flip(8);
++    }
++    query(scalar, packed, label(0, 100., 7., 2, true));
++    insert(scalar, packed, label(0, 8., 7., 4, false));
++    // Deterministic mixed update/query batches exercise stale-order invalidation and fallback mutation.
++    std::mt19937_64 random(0x82ad117);
++    for (int step = 0; step < 180; ++step) {
++        const int mode = random() % 5;
++        if (step % 17 == 0) flags(scalar, packed, step % 34 == 0, step % 51 != 0, step % 68 == 0, step % 85 == 0);
++        const int kind = random() % 6; const double value = 1. + (random() % 30) * .25;
++        const uint64_t u = uint64_t(1) << (2 + random() % 4);
++        if (mode < 3) insert(scalar, packed, label(kind, value, 7., u, step % 2), step % 3 == 0);
++        else correct(scalar, packed, label(kind, value, 7., u, step % 2), step % 3 == 0);
++        if (step % 7 == 0) query(scalar, packed, label(kind, 20., step % 14 ? 7. : 6.5, u, true));
++    }
++    flags(scalar, packed, true, true, false, false);
++    for (auto* c : {&scalar, &packed}) c->clean(true);
++    same(state(scalar), state(packed));
++    // Force stable-sort repair and equal-value signed-zero refresh through real correction.
++    for (int i = 0; i < 70; ++i) insert(scalar, packed, label(i ? 0 : 1, i ? .5 : 0., 7., i > 1 ? 8 : 4, false), false);
++    correct(scalar, packed, label(0, 0., 7., 4, false));
++    // Full-only retirement must remove rows even though the old duration remains nonempty.
++    flags(scalar, packed, false, true, false, false);
++    correct(scalar, packed, label(0, 0., 7., 8, false));
++    flags(scalar, packed, true, true, false, false);
++    query(scalar, packed, label(3, 100., 7., 2, true));
++    for (auto* c : {&scalar, &packed}) c->clean();
++    same(state(scalar), state(packed));
++    for (int i = 0; i < 70; ++i) {
++        auto l = label(0, 0., 7., 4, false); l.min_cost = -0.0;
++        insert(scalar, packed, l, false);
++    }
++    correct(scalar, packed, label(0, 100., 7., 4, false));
++    // Consecutive first/middle/last retirements, emptying and reuse.
++    for (size_t index : {size_t(0), size_t(30), size_t(67)}) {
++        for (auto* c : {&scalar, &packed}) CorrectionInvariantTest::RetireAt(c->mono(), 1, 7., index);
++        same(state(scalar), state(packed)); query(scalar, packed, label(0, 100., 7., 2, false));
++    }
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++    auto& index = CorrectionInvariantTest::Index(packed.mono());
++    const auto before_failure = index.statistics.allocation_failures;
++    index.fail_next_optional_allocation = true;
++#endif
++    insert(scalar, packed, label(0, 0., 7., 4, false));
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++    require(index.AllocationDisabled() && index.statistics.allocation_failures == before_failure + 1,
++            "Optional cache allocation failure did not retain scalar fallback");
++    require(index.statistics.packed_visits && index.statistics.packed_u_tests && index.statistics.packed_queries &&
++            index.statistics.insertions && index.statistics.erasures && index.statistics.value_refreshes &&
++            index.statistics.rebuilds && index.statistics.insertion_shift_bytes && index.statistics.erasure_shift_bytes,
++            "Native sequence failed to exercise packed maintenance/query paths");
++#endif
++    for (int i = 0; i < 3; ++i) insert(scalar, packed, label(i, 8., 7., 4, true));
++    for (auto* c : {&scalar, &packed}) c->clean();
++    same(state(scalar), state(packed));
++    for (int i = 0; i < 66; ++i) insert(scalar, packed, label(0, 4., 7., 4, false), false);
++    query(scalar, packed, label(0, 100., 7., 2, false));
++    Label depot = label(0, 0., 7., 4, false); depot.v = 4; query(scalar, packed, depot);
++#ifdef KAYROS_PACKED_ORDINARY_FILTER_METRICS
++    require(!index.AllocationDisabled(), "Clean did not reenable cache construction");
++    std::cout << "METRICS row_bytes=" << sizeof(PackedOrdinaryFilter::Row)
++              << " peak_live_bytes=" << index.statistics.peak_live_rows * sizeof(PackedOrdinaryFilter::Row)
++              << " peak_capacity_bytes=" << index.statistics.peak_capacity_rows * sizeof(PackedOrdinaryFilter::Row)
++              << " insert_shift_bytes=" << index.statistics.insertion_shift_bytes
++              << " erase_shift_bytes=" << index.statistics.erasure_shift_bytes
++              << " refreshes=" << index.statistics.value_refreshes << '\n';
++#endif
++}
++}
++int main() {
++    try {
++        exercise(false); exercise(true);
++        std::cout << "PASS packed ordinary full-state comparisons=" << comparisons << " digest=" << std::hex << digest << '\n';
++        return 0;
++    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
++}

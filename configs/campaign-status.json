@@ -36,6 +36,11 @@
     "horizon_s": 3600,
     "baseline_source": "f2c9e20",
     "kayros_backend": "cplex",
-    "explicit_exception": "cold HiGHS comparison arm"
-  }
+    "explicit_exception": "cold HiGHS comparison arm",
+    "execution_status": "paused_by_author"
+  },
+  "development_paused": true,
+  "pause_reason": "Author requested stopping the session after completion of already running experiments on 2026-11-10.",
+  "goal_achieved": false,
+  "shutdown_handoff": "docs/ms58-handoff-2026-11-10.md"
 }

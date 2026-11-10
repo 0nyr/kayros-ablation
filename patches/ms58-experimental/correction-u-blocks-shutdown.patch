@@ -1,0 +1,385 @@
+diff --git a/cpp/lera/CMakeLists.txt b/cpp/lera/CMakeLists.txt
+index 53f18f9..0245c77 100644
+--- a/cpp/lera/CMakeLists.txt
++++ b/cpp/lera/CMakeLists.txt
+@@ -40,7 +40,19 @@ else()
+     list(REMOVE_ITEM LERA_GOC_SOURCES ${LERA_HIGHS_SOURCES})
+ endif()
+ 
++option(KAYROS_CORRECTION_U_BLOCKS "Experimental maintained correction-only U blocks" OFF)
++option(KAYROS_CORRECTION_U_BLOCK_METRICS "Untimed correction U-block maintenance metrics" OFF)
++if(KAYROS_CORRECTION_U_BLOCK_METRICS AND NOT KAYROS_CORRECTION_U_BLOCKS)
++    message(FATAL_ERROR "Correction U-block metrics require KAYROS_CORRECTION_U_BLOCKS")
++endif()
+ add_library(lera STATIC ${LERA_GOC_SOURCES} ${LERA_NYR_SOURCES} ${LERA_MAIN_SOURCES})
++# PUBLIC definitions keep the bridge and native clients on the library layout.
++if(KAYROS_CORRECTION_U_BLOCKS)
++    target_compile_definitions(lera PUBLIC KAYROS_CORRECTION_U_BLOCKS)
++endif()
++if(KAYROS_CORRECTION_U_BLOCK_METRICS)
++    target_compile_definitions(lera PUBLIC KAYROS_CORRECTION_U_BLOCK_METRICS)
++endif()
+ 
+ # kayros' C++23 baseline; the vendored code predates it (upstream used C++26
+ # permissively, but nothing needs it — 23 keeps GCC 13 toolchains buildable).
+diff --git a/cpp/lera/main/include/labeling/correction_u_blocks.h b/cpp/lera/main/include/labeling/correction_u_blocks.h
+new file mode 100644
+index 0000000..4a79d81
+--- /dev/null
++++ b/cpp/lera/main/include/labeling/correction_u_blocks.h
+@@ -0,0 +1,221 @@
++#ifndef KAYROS_CORRECTION_U_BLOCKS_H
++#define KAYROS_CORRECTION_U_BLOCKS_H
++
++#include <algorithm>
++#include <cstddef>
++#include <map>
++#include <new>
++#include <utility>
++#include <vector>
++
++#include "label.h"
++
++namespace solver {
++
++// Optional correction index. Keys and masks own their values. No cached bucket,
++// vector or label pointers survive VectorMap relocation or label retirement.
++class CorrectionUBlocks {
++public:
++    static constexpr std::size_t target = 16, split_above = 32, minimum = 64;
++    using Key = std::pair<goc::Vertex, nyr::CapacityUnit>;
++    using Labels = std::vector<Label*>;
++    struct Group {
++        nyr::VertexSet mask;
++        std::size_t live = 0;
++    };
++    struct Bucket {
++        std::vector<Group> groups;
++        std::size_t live = 0;
++    };
++#ifdef KAYROS_CORRECTION_U_BLOCK_METRICS
++    struct Metrics {
++        std::size_t group_checks = 0, skipped_tests = 0, insertions = 0;
++        std::size_t rebuilds = 0, rebuild_reads = 0, split_reads = 0;
++        std::size_t erasures = 0, splits = 0, merges = 0;
++        std::size_t allocation_attempts = 0, allocation_failures = 0;
++        std::size_t live_bytes = 0, capacity_bytes = 0, peak_capacity_bytes = 0;
++        std::size_t checked_mask_bits = 0, conservative_excess_bits = 0;
++    } metrics;
++#endif
++
++    void Invalidate() noexcept {
++        buckets_.clear();
++        Memory();
++    }
++    void Invalidate(Key key) noexcept {
++        buckets_.erase(key);
++        Memory();
++    }
++    void Clean() noexcept {
++        Invalidate();
++        disabled_ = false;
++        fail_after_ = -1;
++    }
++    bool Disabled() const noexcept { return disabled_; }
++    // Native failure injection targets optional allocation sites only.
++    void FailAllocationAfterForTesting(long count) noexcept { fail_after_ = count; }
++    Bucket* Find(Key key, std::size_t size) noexcept {
++        auto it = buckets_.find(key);
++        if (it == buckets_.end()) return nullptr;
++        if (it->second.live != size || it->second.groups.empty()) {
++            buckets_.erase(it);
++            Memory();
++            return nullptr;
++        }
++        return &it->second;
++    }
++
++    void Rebuild(Key key, const Labels& labels) noexcept {
++        if (disabled_) return;
++        if (labels.size() < minimum) {
++            buckets_.erase(key);
++            Memory();
++            return;
++        }
++        try {
++            Bucket next;
++            Allocation();
++            next.groups.reserve((labels.size() + target - 1) / target);
++            for (std::size_t first = 0; first < labels.size(); first += target)
++                next.groups.push_back(Summary(labels, first, std::min(target, labels.size() - first)));
++            next.live = labels.size();
++            auto it = buckets_.find(key);
++            if (it == buckets_.end()) {
++                Allocation();
++                buckets_.emplace(key, std::move(next));
++            } else {
++                it->second.groups.swap(next.groups);
++                it->second.live = next.live;
++            }
++            CountRebuild(labels.size());
++            Memory();
++        } catch (const std::bad_alloc&) { AllocationFailed(); }
++    }
++
++    // The mandatory upper_bound insertion has already succeeded. At a boundary,
++    // the inserted label belongs to the group on its right, except at bucket end.
++    void Inserted(Key key, const Labels& labels, std::size_t position) noexcept {
++        if (disabled_) return;
++        auto it = buckets_.find(key);
++        if (it == buckets_.end()) { Rebuild(key, labels); return; }
++        auto& bucket = it->second;
++        if (bucket.live + 1 != labels.size()) {
++            buckets_.erase(it);
++            Memory();
++            return;
++        }
++        std::size_t first = 0, g = 0;
++        while (g + 1 < bucket.groups.size() && position >= first + bucket.groups[g].live) {
++            first += bucket.groups[g].live;
++            ++g;
++        }
++        auto& group = bucket.groups[g];
++        group.mask |= labels[position]->U;
++        ++group.live;
++        ++bucket.live;
++#ifdef KAYROS_CORRECTION_U_BLOCK_METRICS
++        ++metrics.insertions;
++#endif
++        if (group.live > split_above) {
++            try {
++                const std::size_t left = group.live / 2, right = group.live - left;
++                const auto a = Summary(labels, first, left);
++                const auto b = Summary(labels, first + left, right);
++                if (bucket.groups.size() == bucket.groups.capacity()) Allocation();
++                bucket.groups.insert(bucket.groups.begin() + g + 1, b);
++                bucket.groups[g] = a;
++#ifdef KAYROS_CORRECTION_U_BLOCK_METRICS
++                ++metrics.splits;
++                metrics.split_reads += left + right;
++#endif
++            } catch (const std::bad_alloc&) { AllocationFailed(); return; }
++        }
++        Memory();
++    }
++
++    static void Erased(Bucket& bucket, std::size_t group) noexcept {
++        --bucket.groups[group].live;
++        --bucket.live;
++    }
++    void CountErase() noexcept {
++#ifdef KAYROS_CORRECTION_U_BLOCK_METRICS
++        ++metrics.erasures;
++#endif
++    }
++    void Finish(Bucket& bucket) noexcept {
++        auto& groups = bucket.groups;
++        groups.erase(std::remove_if(groups.begin(), groups.end(),
++            [](const Group& group) { return group.live == 0; }), groups.end());
++        for (std::size_t g = 0; g + 1 < groups.size();) {
++            if (groups[g].live + groups[g + 1].live <= target) {
++                groups[g].mask |= groups[g + 1].mask;
++                groups[g].live += groups[g + 1].live;
++                groups.erase(groups.begin() + g + 1);
++#ifdef KAYROS_CORRECTION_U_BLOCK_METRICS
++                ++metrics.merges;
++#endif
++            } else ++g;
++        }
++        Memory();
++    }
++
++    bool Reject(const Group& group, const nyr::VertexSet& arriving,
++                const Labels& labels, std::size_t first) noexcept {
++#ifdef KAYROS_CORRECTION_U_BLOCK_METRICS
++        ++metrics.group_checks;
++        nyr::VertexSet exact;
++        for (std::size_t i = first; i < first + group.live; ++i) exact |= labels[i]->U;
++        metrics.checked_mask_bits += group.mask.count();
++        metrics.conservative_excess_bits += (group.mask & ~exact).count();
++#endif
++        const bool rejected = (arriving & ~group.mask).any();
++#ifdef KAYROS_CORRECTION_U_BLOCK_METRICS
++        if (rejected) metrics.skipped_tests += group.live;
++#endif
++        return rejected;
++    }
++
++private:
++    std::map<Key, Bucket> buckets_;
++    bool disabled_ = false;
++    long fail_after_ = -1;
++
++    static Group Summary(const Labels& labels, std::size_t first, std::size_t length) noexcept {
++        Group group{{}, length};
++        for (std::size_t i = first; i < first + length; ++i) group.mask |= labels[i]->U;
++        return group;
++    }
++    void Allocation() {
++#ifdef KAYROS_CORRECTION_U_BLOCK_METRICS
++        ++metrics.allocation_attempts;
++#endif
++        if (fail_after_ == 0) throw std::bad_alloc();
++        if (fail_after_ > 0) --fail_after_;
++    }
++    void AllocationFailed() noexcept {
++        disabled_ = true;
++#ifdef KAYROS_CORRECTION_U_BLOCK_METRICS
++        ++metrics.allocation_failures;
++#endif
++        Invalidate();
++    }
++    void CountRebuild(std::size_t size) noexcept {
++#ifdef KAYROS_CORRECTION_U_BLOCK_METRICS
++        ++metrics.rebuilds;
++        metrics.rebuild_reads += size;
++#endif
++    }
++    void Memory() noexcept {
++#ifdef KAYROS_CORRECTION_U_BLOCK_METRICS
++        // Payload and vector capacity, excluding allocator and map-node overhead.
++        metrics.live_bytes = metrics.capacity_bytes = buckets_.size() * sizeof(typename decltype(buckets_)::value_type);
++        for (const auto& [key, bucket] : buckets_) {
++            metrics.live_bytes += bucket.groups.size() * sizeof(Group);
++            metrics.capacity_bytes += bucket.groups.capacity() * sizeof(Group);
++        }
++        metrics.peak_capacity_bytes = std::max(metrics.peak_capacity_bytes, metrics.capacity_bytes);
++#endif
++    }
++};
++}
++#endif
+diff --git a/cpp/lera/main/include/labeling/monodirectional_labeling.h b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+index 0cc5b86..8c62aea 100644
+--- a/cpp/lera/main/include/labeling/monodirectional_labeling.h
++++ b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+@@ -14,6 +14,9 @@
+ #include <nyr/nyr.h>
+ 
+ #include "label.h"
++#ifdef KAYROS_CORRECTION_U_BLOCKS
++#include "correction_u_blocks.h"
++#endif
+ #include "lazy_label.h"
+ #include "bcp/pricing_problem.h"
+ #include "ng_neighborhoods.h"
+@@ -52,6 +55,10 @@ public:
+ 	typedef goc::VectorMap<nyr::CapacityUnit, BoundLevel> DemandLevel;
+ 	typedef std::vector<DemandLevel> DominanceStructure;
+ 	DominanceStructure U; // Indexed by last vertex, demand and sorted by c_min.
++#ifdef KAYROS_CORRECTION_U_BLOCKS
++	// Required after native callers directly mutate public U or a live label's U.
++	void InvalidateCorrectionBlocks() noexcept { correction_u_blocks_.Invalidate(); }
++#endif
+ 	int processed_count; // Number of labels in the dominance structure.
+ 	
+ 	std::optional<TDNGNeighborhoods> ng; // Neighborhoods to use for the labeling algorithm.
+@@ -76,6 +83,9 @@ public:
+ private:
+ 	friend class BidirectionalLabeling;
+ 	friend struct CorrectionInvariantTest;
++#ifdef KAYROS_CORRECTION_U_BLOCKS
++	CorrectionUBlocks correction_u_blocks_;
++#endif
+ 	// Removed labels can remain parents of queued or processed labels.
+ 	// Retain their ownership until the whole pricing call is cleaned.
+ 	std::vector<Label*> retired_labels_;
+diff --git a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+index 6714d11..fd9cbe9 100644
+--- a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+@@ -491,8 +491,28 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 		auto& demand_entry = *it_d;
+ 		if (epsilon_smaller(demand_entry.first, m->q)) break;
+ 		bool changed_cost = false;
++#ifdef KAYROS_CORRECTION_U_BLOCKS
++		// Maintain live lengths even when a relaxation requires the scalar path.
++		auto* blocks = correction_u_blocks_.Find({m->v, demand_entry.first}, demand_entry.second.size());
++		const bool filter = blocks && demand_entry.second.size() >= CorrectionUBlocks::minimum
++			&& !elementary_check_relaxation && !ng_routes_relaxation;
++		std::size_t group = 0, group_end = blocks ? blocks->groups[0].live : 0;
++#endif
+ 		for (int j = 0; j < demand_entry.second.size(); ++j)
+ 		{
++#ifdef KAYROS_CORRECTION_U_BLOCKS
++			if (blocks)
++			{
++				while (group_end <= static_cast<std::size_t>(j) && group + 1 < blocks->groups.size())
++					group_end += blocks->groups[++group].live;
++				if (filter && static_cast<std::size_t>(j) == group_end - blocks->groups[group].live
++					&& correction_u_blocks_.Reject(blocks->groups[group], m->U, demand_entry.second, j))
++				{
++					j += static_cast<int>(blocks->groups[group].live) - 1;
++					continue;
++				}
++			}
++#endif
+ 			Label* l = demand_entry.second[j];
+ 			if (!elementary_check_relaxation && !is_subset(m->U, l->U)) continue;
+ 			if (!cost_check_relaxation)
+@@ -515,17 +535,37 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 					// If l is fully dominated, remove.
+ 					retired_labels_.push_back(l);
+ 					demand_entry.second.erase(demand_entry.second.begin()+j);
++#ifdef KAYROS_CORRECTION_U_BLOCKS
++					if (blocks)
++					{
++						CorrectionUBlocks::Erased(*blocks, group);
++						correction_u_blocks_.CountErase();
++						--group_end;
++					}
++#endif
+ 					--j;
+ 					++removed;
+ 				}
+ 			}
+ 		}
++#ifdef KAYROS_CORRECTION_U_BLOCKS
++		if (blocks) correction_u_blocks_.Finish(*blocks);
++#endif
+ 		if (changed_cost)
+ 		{
+ 			// Subsequent labels consult U before this batch returns.
+ 			if (sort_by_cost)
++			{
++#ifdef KAYROS_CORRECTION_U_BLOCKS
++				// stable_sort changes membership. Never publish partially rebuilt masks.
++				correction_u_blocks_.Invalidate({m->v, demand_entry.first});
++#endif
+ 				std::stable_sort(demand_entry.second.begin(), demand_entry.second.end(),
+ 					[&](Label* a, Label* b) { return alpha(a, partial) < alpha(b, partial); });
++#ifdef KAYROS_CORRECTION_U_BLOCKS
++				correction_u_blocks_.Rebuild({m->v, demand_entry.first}, demand_entry.second);
++#endif
++			}
+ 			corrected_merge_buckets_.emplace_back(m->v, demand_entry.first);
+ 		}
+ 	}
+@@ -535,8 +575,17 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ void MonodirectionalLabeling::ProcessStep(Label* l)
+ {
+ 	// (If domination structure) insert label l into the dominance structure U.
++#ifdef KAYROS_CORRECTION_U_BLOCKS
++	auto& bucket = U[l->v].Insert(floor(l->q), {});
++	std::size_t position = bucket.size();
++	if (sort_by_cost)
++		position = insert_sorted(bucket, l, [&](Label* l1, Label* l2) { return alpha(l1, partial) < alpha(l2, partial); }) - bucket.begin();
++	else bucket.push_back(l);
++	correction_u_blocks_.Inserted({l->v, floor(l->q)}, bucket, position);
++#else
+ 	if (sort_by_cost) insert_sorted(U[l->v].Insert(floor(l->q), {}), l, [&](Label* l1, Label* l2) { return alpha(l1, partial) < alpha(l2, partial); });
+ 	else U[l->v].Insert(floor(l->q), {}).push_back(l); // else, just push it to the end of the list.
++#endif
+ }
+ 
+ vector<LazyLabel> MonodirectionalLabeling::EnumerationStep(Label* l) const
+@@ -568,6 +617,9 @@ vector<LazyLabel> MonodirectionalLabeling::EnumerationStep(Label* l) const
+ 
+ void MonodirectionalLabeling::Clean()
+ {
++#ifdef KAYROS_CORRECTION_U_BLOCKS
++	correction_u_blocks_.Clean();
++#endif
+ 	processed_count = 0;
+ 	for (auto& entry: U)
+ 		for (auto& entry_2: entry)
