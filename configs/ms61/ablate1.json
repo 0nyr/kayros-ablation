@@ -1,0 +1,1053 @@
+{
+ "defaults": {
+  "n": 100,
+  "memory_mb": 16384,
+  "rep": 1
+ },
+ "cells": [
+  {
+   "id": "R110-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "R110",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R110-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "R110",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R110-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "R110",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R110-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "R110",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R110-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "R110",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R110-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "R110",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R110-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "R110",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R104-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "R104",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R104-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "R104",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R104-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "R104",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R104-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "R104",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R104-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "R104",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R104-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "R104",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R104-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "R104",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R107-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "R107",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R107-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "R107",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R107-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "R107",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R107-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "R107",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R107-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "R107",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R107-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "R107",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R107-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "R107",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "C103-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "C103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C103-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "C103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C103-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "C103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C103-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "C103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C103-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "C103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C103-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "C103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C103-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "C103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C109-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "C109",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C109-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "C109",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C109-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "C109",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C109-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "C109",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C109-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "C109",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C109-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "C109",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C109-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "C109",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C205-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "C205",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C205-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "C205",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C205-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "C205",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C205-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "C205",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C205-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "C205",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C205-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "C205",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C205-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "C205",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C206-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "C206",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C206-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "C206",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C206-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "C206",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C206-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "C206",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C206-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "C206",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C206-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "C206",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C206-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "C206",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C208-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "C208",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C208-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "C208",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C208-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "C208",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C208-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "C208",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C208-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "C208",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C208-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "C208",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "C208-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "C208",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R103-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "R103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R103-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "R103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R103-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "R103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R103-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "R103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R103-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "R103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R103-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "R103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R103-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "R103",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R106-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "R106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R106-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "R106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R106-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "R106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R106-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "R106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R106-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "R106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R106-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "R106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "R106-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "R106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC102-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "RC102",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC102-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "RC102",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC102-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "RC102",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC102-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "RC102",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC102-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "RC102",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC102-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "RC102",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC102-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "RC102",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC106-lera",
+   "kind": "lera",
+   "arm": "lera-f2",
+   "instance": "RC106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC106-pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "pk",
+   "instance": "RC106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC106-pk-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-hb1",
+   "instance": "RC106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC106-pk-d0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0"
+   },
+   "arm": "pk-d0",
+   "instance": "RC106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC106-pk-e2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_EARLY_CUTS": "2"
+   },
+   "arm": "pk-e2",
+   "instance": "RC106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC106-pk-n2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_NEAR_REL": "0.02"
+   },
+   "arm": "pk-n2",
+   "instance": "RC106",
+   "time_limit_s": 2400
+  },
+  {
+   "id": "RC106-A-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c7",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "A-hb1",
+   "instance": "RC106",
+   "time_limit_s": 2400
+  }
+ ]
+}

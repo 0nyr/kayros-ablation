@@ -253,7 +253,7 @@ def run_cell(cell, lane, args, host, runtime, runner_id):
             if cell['mode'] == 'full':
                 command += ['--seed', str(cell['seed']), '--prefix-seconds', str(cell['prefix_s'])]
         else:
-            identity = runtime.lera(Path(args.lera_binary).resolve(), Path(args.lera_source).resolve())
+            identity = runtime.lera(Path(os.path.expanduser(cell.get('lera_binary') or str(args.lera_binary))).resolve(), Path(args.lera_source).resolve())
             command = [args.lera_python, str(SCRIPT_DIR / 'ms61_lera_worker.py'), '--instance', str(instance),
                        '--memory-mb', memory, '--native-result', str(native_path),
                        '--binary', identity['binary'], '--source-root', identity['source_root']]
