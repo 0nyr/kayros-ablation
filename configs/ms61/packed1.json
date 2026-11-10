@@ -1,0 +1,68 @@
+{
+ "defaults": {
+  "n": 100,
+  "memory_mb": 16384,
+  "rep": 1
+ },
+ "cells": [
+  {
+   "id": "C104-c1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c3",
+   "env": {},
+   "arm": "c1",
+   "instance": "C104",
+   "time_limit_s": 1500
+  },
+  {
+   "id": "C104-c1pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c3",
+   "env": {
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "c1pk",
+   "instance": "C104",
+   "time_limit_s": 1500
+  },
+  {
+   "id": "C104-c0",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c3",
+   "env": {
+    "KAYROS_BPC_CORRECTION": "0"
+   },
+   "arm": "c0",
+   "instance": "C104",
+   "time_limit_s": 1500
+  },
+  {
+   "id": "C104-c0pk",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c3",
+   "env": {
+    "KAYROS_BPC_CORRECTION": "0",
+    "KAYROS_BPC_PACKED": "1"
+   },
+   "arm": "c0pk",
+   "instance": "C104",
+   "time_limit_s": 1500
+  },
+  {
+   "id": "C104-c1pk2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c3",
+   "env": {
+    "KAYROS_BPC_PACKED": "2"
+   },
+   "arm": "c1pk2",
+   "instance": "C104",
+   "time_limit_s": 1500
+  }
+ ]
+}

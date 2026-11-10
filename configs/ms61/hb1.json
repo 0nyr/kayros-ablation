@@ -1,0 +1,169 @@
+{
+ "defaults": {
+  "n": 100,
+  "memory_mb": 16384,
+  "rep": 1
+ },
+ "cells": [
+  {
+   "id": "RC104-pk-d0e2n2-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c4",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-d0e2n2-hb1",
+   "instance": "RC104",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R112-pk-d0e2n2-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c4",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-d0e2n2-hb1",
+   "instance": "R112",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "C104-pk-d0e2n2-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c4",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-d0e2n2-hb1",
+   "instance": "C104",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R202-pk-d0e2n2-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c4",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-d0e2n2-hb1",
+   "instance": "R202",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "RC202-pk-d0e2n2-hb1",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c4",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "1"
+   },
+   "arm": "pk-d0e2n2-hb1",
+   "instance": "RC202",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "RC104-pk-d0e2n2-hb2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c4",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "2"
+   },
+   "arm": "pk-d0e2n2-hb2",
+   "instance": "RC104",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R112-pk-d0e2n2-hb2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c4",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "2"
+   },
+   "arm": "pk-d0e2n2-hb2",
+   "instance": "R112",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "C104-pk-d0e2n2-hb2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c4",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "2"
+   },
+   "arm": "pk-d0e2n2-hb2",
+   "instance": "C104",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "R202-pk-d0e2n2-hb2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c4",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "2"
+   },
+   "arm": "pk-d0e2n2-hb2",
+   "instance": "R202",
+   "time_limit_s": 3600
+  },
+  {
+   "id": "RC202-pk-d0e2n2-hb2",
+   "kind": "kayros",
+   "mode": "cold",
+   "venv": "/home/frascous/ms61-bpc/venvs/ms61-c4",
+   "env": {
+    "KAYROS_BPC_PACKED": "1",
+    "KAYROS_BPC_DROPBACK_LEVEL": "0",
+    "KAYROS_BPC_EARLY_CUTS": "2",
+    "KAYROS_BPC_NEAR_REL": "0.02",
+    "KAYROS_BPC_HE_CUTBLIND": "2"
+   },
+   "arm": "pk-d0e2n2-hb2",
+   "instance": "RC202",
+   "time_limit_s": 3600
+  }
+ ]
+}

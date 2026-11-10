@@ -11,7 +11,7 @@ jobs=${4:?usage: ms61_launch.sh JOB_ID PLAN.json OUT_DIR JOBS}
 [[ "$job" =~ ^[0-9]+$ && "$jobs" =~ ^[0-9]+$ ]] || { echo "JOB_ID and JOBS must be integers" >&2; exit 2; }
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 remote=nancy.g5k
-ssh_opts=(-S none -o ConnectTimeout=15)
+read -r -a ssh_opts <<< "${MS61_SSH_OPTS:--S none -o ConnectTimeout=15}"
 rsh="ssh ${ssh_opts[*]}"
 remote_home=$(ssh "${ssh_opts[@]}" "$remote" 'echo $HOME')
 [[ "$out" = /* ]] || out="$remote_home/ms61-bpc/runs/$out"
