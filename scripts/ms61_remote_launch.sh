@@ -170,7 +170,7 @@ for host in "${hosts[@]}"; do
     rec=$(python3 -c '
 import json, sys
 try:
-    r = json.load(open(sys.argv[1])); print(f"pid {r[\"pid\"]} {r[\"started_utc\"][11:19]} {len(r[\"lanes\"])} lanes")
+    r = json.load(open(sys.argv[1])); print("pid %s %s %d lanes" % (r["pid"], r["started_utc"][11:19], len(r["lanes"])))
 except Exception as e:
     print("no runner json")' "$out/runners/$host.json")
     tailline=$(tail -n 1 "$out/runners/$host.log" 2>/dev/null | cut -c1-110 || true)
