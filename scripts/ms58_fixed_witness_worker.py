@@ -15,8 +15,10 @@ from ms58_fixed_witness import (ARMS, EXACT_SECONDS, INSTANCES, MEMORY_MB,
 from probe_runner import atomic_json
 
 
-def arm_stage_deadline(stage_start_ns):
-    deadline = stage_start_ns + int(EXACT_SECONDS * 1e9)
+def arm_stage_deadline(stage_start_ns, exact_seconds=EXACT_SECONDS):
+    if exact_seconds not in (600, 3600):
+        raise ValueError('Only the declared 600 s pilot or 3600 s C104 stage is supported')
+    deadline = stage_start_ns + int(exact_seconds * 1e9)
     # Native Lera consults this deadline. Its original timestamp origin stays.
     os.environ['PROBE_DEADLINE_MONOTONIC_NS'] = str(deadline)
     signal.signal(signal.SIGALRM, signal.SIG_DFL)
@@ -40,6 +42,7 @@ def native_metadata(native, materialized):
 
 
 def main(args):
+    exact_seconds = args.exact_seconds
     os.sched_setaffinity(0, {int(os.environ['PROBE_CPU_AFFINITY'])})
     cap = MEMORY_MB * 1024**2
     resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
@@ -49,8 +52,9 @@ def main(args):
                           **payload}, allow_nan=False), flush=True)
     witness = json.loads(checked_file(args.witness, args.witness_sha256).read_bytes())
     materialized = json.loads(args.instance.read_bytes())
-    if materialized['instance_name'] not in INSTANCES or materialized['num_customers'] != 100:
-        raise ValueError('Only the 4 declared Dabia n100 witnesses are allowed')
+    allowed = ('C104',) if exact_seconds == 3600 else INSTANCES
+    if materialized['instance_name'] not in allowed or materialized['num_customers'] != 100:
+        raise ValueError('Only the instance cohort declared for this exact-stage budget is allowed')
     atf = args.instance.parent / materialized['td']['atf_path']
     if (sha256(args.instance) != witness['instance_sha256'] or sha256(atf) != witness['atf_sha256']
             or witness['instance_name'] != materialized['instance_name']):
@@ -64,7 +68,7 @@ def main(args):
          cpu_affinity=sorted(os.sched_getaffinity(0)), address_space_limit_bytes=cap)
     if warm:
         emit('candidate', phase='caller_held_before_exact', native_cost=checked['checked_cost'],
-             routes=witness['routes'], source='frozen_checked_Full5_seed123_witness',
+             routes=witness['routes'], source='frozen_checked_caller_witness',
              routes_format='mamut-customers', supplied_to_native=True)
     manifest = json.loads(checked_file(args.runtime_manifest, args.runtime_manifest_sha256).read_bytes())
     native = args.arm == 'lera-minimal'
@@ -78,7 +82,7 @@ def main(args):
         parameters_path = source / 'experiments/bp.json'
         checked_file(parameters_path, manifest['runtime_files'][str(parameters_path)])
         parameters = next(e for e in json.loads(parameters_path.read_bytes())['experiments'] if e['name'] == 'BP-CUTS')
-        parameters['time_limit'] = EXACT_SECONDS
+        parameters['time_limit'] = exact_seconds
     else:
         from kayros import _lera
         from kayros.lera import _has_stepwise_atfs, to_lera_payload
@@ -89,7 +93,7 @@ def main(args):
         else:
             os.environ.pop('KAYROS_STEP_EXACT', None)
         payload = json.dumps(to_lera_payload(loaded))
-        kwargs = {'time_limit_s': EXACT_SECONDS, 'cut_limit': 500, 'solution_limit': 3000,
+        kwargs = {'time_limit_s': exact_seconds, 'cut_limit': 500, 'solution_limit': 3000,
                   'stab_alpha': 0., 'memory_limit_mb': float(MEMORY_MB)}
         if warm:
             # Original IDs have already passed strict checks. No int() coercion.
@@ -118,13 +122,13 @@ def main(args):
             else:
                 emit('phase', phase='exact_terminated', **event)
         kwargs.update(on_incumbent=incumbent_hook, on_event=event_hook)
-    if (int(os.environ['PROBE_DEADLINE_MONOTONIC_NS']) - time.monotonic_ns()) / 1e9 < EXACT_SECONDS + 1:
+    if (int(os.environ['PROBE_DEADLINE_MONOTONIC_NS']) - time.monotonic_ns()) / 1e9 < exact_seconds + 1:
         raise ValueError('Preparation exhausted the separate 60 s process allowance')
     stage_start_ns = time.monotonic_ns()
-    emit('phase', phase='exact_stage_start', exact_budget_s=EXACT_SECONDS,
+    emit('phase', phase='exact_stage_start', exact_budget_s=exact_seconds,
          elapsed_s=(stage_start_ns - origin) / 1e9,
          clock_scope='exact stage after preparation', native_backend='CPLEX')
-    arm_stage_deadline(stage_start_ns)
+    arm_stage_deadline(stage_start_ns, exact_seconds)
     if native:
         emit('phase', phase='native_launch', native_instance_sha256=sha256(native_path),
              metadata_equivalence=metadata, parameters=parameters)
@@ -166,4 +170,5 @@ if __name__ == '__main__':
     parser.add_argument('--runtime-manifest', type=Path, required=True)
     parser.add_argument('--runtime-manifest-sha256', required=True)
     parser.add_argument('--native-result', type=Path, required=True)
+    parser.add_argument('--exact-seconds', type=int, choices=[600, 3600], default=600)
     main(parser.parse_args())

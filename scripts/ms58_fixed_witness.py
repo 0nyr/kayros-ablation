@@ -132,18 +132,21 @@ def make_design(args):
     print(json.dumps({'design': str(args.output), 'scheduled_cells': 20, 'launched': False}))
 
 
-def freeze_inputs_and_witnesses(design, output, checker):
+def freeze_inputs_and_witnesses(design, output, checker, *, c104_confirmation=False):
     source = Path(design['source_wave']['path']).resolve()
     original = json.loads(checked_file(source / 'wave.json', design['source_wave']['sha256']).read_bytes())
     if original.get('kayros_source_id') != BASE or original.get('checker') != checker:
         raise ValueError('Witnesses must come from the declared 9d main panel and checker')
     rows = {}
-    for name in INSTANCES:
+    instances = ('C104',) if c104_confirmation else INSTANCES
+    source_arm = 'kayros-full-cplex-prefix15s' if c104_confirmation else 'kayros-full-cplex-prefix5s'
+    source_seed, source_rep, source_prefix = (456, 3, 15) if c104_confirmation else (123, 2, 5)
+    for name in instances:
         matches = [t for t in original['scheduled_cells'] if t['num_customers'] == 100
-            and t['instance_name'] == name and t['arm_id'] == 'kayros-full-cplex-prefix5s'
-            and t['seed'] == 123 and t['replicate'] == 2]
+            and t['instance_name'] == name and t['arm_id'] == source_arm
+            and t['seed'] == source_seed and t['replicate'] == source_rep]
         if len(matches) != 1:
-            raise ValueError('Exactly one original Full5 seed123 witness source is required')
+            raise ValueError('Exactly one declared original Full-prefix witness source is required')
         task = matches[0]
         stored_row = json.loads((source / 'rows' / f"{task['task_id']}.json").read_bytes())
         if any(stored_row.get(k) != v for k, v in task.items()):
@@ -152,6 +155,9 @@ def freeze_inputs_and_witnesses(design, output, checker):
         result = load_completed(cell, expected_run_id=stored_row['run_id'])
         original_events = [json.loads(line) for line in (cell / 'events.jsonl').read_text().splitlines()]
         proof_evidence(result['validation'], original_events, task['horizon_s'], expected_inputs=task)
+        source_closure, _ = closure_and_resource(result, original_events, (cell / 'stderr.log').read_text(errors='replace'))
+        if c104_confirmation and (result['status'] != 'completed' or source_closure is None):
+            raise ValueError('The outcome-selected C104 source must be the completed closing Full15 cell')
         identity = json.loads((cell / 'identity.json').read_bytes())
         manifest = json.loads(checked_file(source / 'manifests' / Path(task['manifest_path']).name,
                                            task['manifest_sha256']).read_bytes())
@@ -162,7 +168,7 @@ def freeze_inputs_and_witnesses(design, output, checker):
         if not handoff or not finite(handoff.get('native_cost')):
             raise ValueError('Original Full5 native artifact has no finite handoff witness')
         candidates = [c for c in result['validation'].get('candidates', []) if c.get('valid') is True
-            and c.get('routes') == handoff['routes'] and c.get('elapsed_s', 6) <= 5]
+            and c.get('routes') == handoff['routes'] and c.get('elapsed_s', source_prefix + 1) <= source_prefix]
         if not candidates or result['validation'].get('checker') != checker:
             raise ValueError('Original handoff lacks checked in-prefix candidate evidence')
         path = Path(design['inputs']) / f'{name}.vrp.json'
@@ -186,19 +192,62 @@ def freeze_inputs_and_witnesses(design, output, checker):
             [source / 'wave.json', cell / 'identity.json', cell / 'result.json', cell / 'events.jsonl', native_path]}
         witness.update(instance_name=name, num_customers=100, instance_sha256=task['instance_sha256'],
             atf_sha256=task['atf_sha256'], source_task_id=task['task_id'], source_run_id=stored_row['run_id'],
-            source_seed=123, source_repetition=2, source_prefix_s=5, source_artifacts_sha256=provenance,
+            source_seed=source_seed, source_repetition=source_rep, source_prefix_s=source_prefix,
+            source_arm_id=source_arm, source_reported_closure_s=source_closure,
+            outcome_selected_mechanism_case=c104_confirmation, source_artifacts_sha256=provenance,
             source_checked_candidate_sequences=[c['sequence'] for c in candidates])
         witness_path = output / 'witnesses' / f'{name}.json'
         atomic_json(witness_path, witness)
+        reference_path, reference_cost = witness_path, witness['checked_cost']
+        external_references = []
+        if c104_confirmation:
+            best = min((c for c in result['validation']['candidates'] if c.get('valid') is True),
+                       key=lambda c: c['checked_cost'])
+            reference, _ = checked_witness(target, best['routes'], best['checked_cost'])
+            reference.update(instance_name=name, instance_sha256=task['instance_sha256'],
+                atf_sha256=task['atf_sha256'], source_run_id=stored_row['run_id'],
+                source_task_id=task['task_id'], source_candidate_sequence=best['sequence'],
+                source_candidate_elapsed_s=best['elapsed_s'], source_artifacts_sha256=provenance,
+                role='External checked feasible proof ceiling. Never supplied as the fixed native handoff.')
+            reference_path = output / 'witnesses' / f'{name}-proof-reference.json'
+            atomic_json(reference_path, reference)
+            reference_cost = reference['checked_cost']
+            external_references.append({'path': str(reference_path), 'sha256': sha256(reference_path),
+                'checked_cost': reference_cost, 'kind': 'source_run_checked_incumbent'})
+            frozen_description = original['reference_manifests']['100']
+            frozen_manifest_path = source / 'frozen-references' / Path(frozen_description['path']).name
+            frozen_manifest = json.loads(checked_file(frozen_manifest_path, frozen_description['sha256']).read_bytes())
+            entry = next(e for e in frozen_manifest['instances'] if e['instance_name'] == name)
+            solution_path = source / 'frozen-references/n100' / f'{name}-solution.json'
+            check_path = source / 'frozen-references/n100' / f'{name}-check.json'
+            solution = json.loads(checked_file(solution_path, entry['solution_sha256']).read_bytes())
+            stored_check = json.loads(checked_file(check_path, entry['check_sha256']).read_bytes())
+            cost = float.fromhex(entry['reference_cost_hex'])
+            if (frozen_manifest['checker'] != checker or entry['instance_sha256'] != task['instance_sha256']
+                    or entry['atf_file_sha256'] != task['atf_sha256'] or cost != entry['reference_cost']
+                    or stored_check.get('status') != 'valid' or stored_check.get('routing_cost') != cost):
+                raise ValueError('Original frozen reference checker, inputs or cost differs')
+            frozen_reference, _ = checked_witness(target, solution['routes'], cost)
+            frozen_reference.update(instance_name=name, instance_sha256=task['instance_sha256'],
+                atf_sha256=task['atf_sha256'], source_reference_manifest_sha256=sha256(frozen_manifest_path),
+                source_solution_sha256=sha256(solution_path), source_check_sha256=sha256(check_path),
+                role='Original independently checked frozen n100 reference. External ceiling only, never a native handoff.')
+            frozen_path = output / 'witnesses' / f'{name}-original-frozen-reference.json'
+            atomic_json(frozen_path, frozen_reference)
+            external_references.append({'path': str(frozen_path), 'sha256': sha256(frozen_path),
+                'checked_cost': cost, 'kind': 'original_frozen_n100_reference'})
+            if cost < reference_cost:
+                reference_path, reference_cost = frozen_path, cost
         rows[name] = {'instance_name': name, 'instance_key': f'Dabia2013/n=100/{name}',
             'num_customers': 100, 'instance_path': str(target), 'instance_sha256': sha256(target),
             'atf_path': str(target_atf), 'atf_sha256': sha256(target_atf),
             'witness_path': str(witness_path), 'witness_sha256': sha256(witness_path),
-            'reference_cost': witness['checked_cost'], 'reference_manifest_sha256': sha256(witness_path)}
+            'reference_cost': reference_cost, 'reference_manifest_sha256': sha256(reference_path),
+            'proof_reference_path': str(reference_path), 'external_feasible_references': external_references}
     return rows
 
 
-def freeze_runtime(key, spec, output, checker):
+def freeze_runtime(key, spec, output, checker, *, c104_confirmation=False):
     path = checked_file(spec['path'], spec['sha256'])
     manifest = json.loads(path.read_bytes())
     if (manifest.get('schema_version') != 1 or manifest.get('checker') != checker
@@ -227,7 +276,8 @@ def freeze_runtime(key, spec, output, checker):
         if manifest['runtime_files'].get(str(binary)) != LERA_BINARY or LERA_PATCH not in manifest['source_patch_files'].values():
             raise ValueError('Fixed minimal Lera binary or one-line correction patch differs')
         root = Path(environment['UPSTREAM_SOURCE_ROOT']).resolve()
-        for relative in ['experiments/bp.json', *[f'instances/dabia_et_al_2013/{name}_100.json' for name in INSTANCES]]:
+        instances = ('C104',) if c104_confirmation else INSTANCES
+        for relative in ['experiments/bp.json', *[f'instances/dabia_et_al_2013/{name}_100.json' for name in instances]]:
             native = root / relative
             if str(native) in manifest['runtime_files'] and manifest['runtime_files'][str(native)] != sha256(native):
                 raise ValueError('Fixed native input or parameter bytes changed')
@@ -332,8 +382,9 @@ def cell_contract(task, spec, manifest, scripts, output):
     command = [spec['worker_python'], str(worker), '--instance', task['instance_path'],
         '--witness', task['witness_path'], '--witness-sha256', task['witness_sha256'], '--arm', task['arm_id'],
         '--runtime-manifest', spec['path'], '--runtime-manifest-sha256', spec['sha256']]
+    command += ['--exact-seconds', str(int(task.get('horizon_s', EXACT_SECONDS)))]
     common = {'schema_version': 1, 'manifest_hash': digest(manifest), 'parameters': parameters,
-              'horizon_s': PROCESS_SECONDS, 'cwd': str(output), 'environment_hash': digest(environment)}
+              'horizon_s': task.get('process_horizon_s', PROCESS_SECONDS), 'cwd': str(output), 'environment_hash': digest(environment)}
     artifact_id = digest({**common, 'command': command})
     native = output / 'cells/native' / f'{artifact_id}.json'
     command += ['--native-result', str(native)]
@@ -371,15 +422,17 @@ def cell(args):
 
 
 def stage_evidence(result, events, late, task):
+    exact_seconds = task.get('horizon_s', EXACT_SECONDS)
+    process_seconds = task.get('process_horizon_s', PROCESS_SECONDS)
     starts = [e for e in events if e.get('phase') == 'exact_stage_start']
     if len(starts) != 1:
         raise ValueError('Exactly one exact-stage clock origin is required')
     start = starts[0]['elapsed_s']
-    accepted = [e for e in events if e['elapsed_s'] <= start + EXACT_SECONDS]
-    excluded = [e for e in events if e['elapsed_s'] > start + EXACT_SECONDS] + late
+    accepted = [e for e in events if e['elapsed_s'] <= start + exact_seconds]
+    excluded = [e for e in events if e['elapsed_s'] > start + exact_seconds] + late
     validation = dict(result['validation'], candidates=[c for c in result['validation'].get('candidates', [])
-                                                      if c['elapsed_s'] <= start + EXACT_SECONDS])
-    evidence = proof_evidence(validation, accepted, PROCESS_SECONDS, excluded, expected_inputs=task)
+                                                      if c['elapsed_s'] <= start + exact_seconds])
+    evidence = proof_evidence(validation, accepted, process_seconds, excluded, expected_inputs=task)
     for key in ['checked_candidates', 'global_bound_claims', 'raw_closure_claims', 'unavailable_global_bound_events']:
         for item in evidence.get(key, []):
             item['process_elapsed_s'] = item['elapsed_s']
@@ -392,6 +445,7 @@ def stage_evidence(result, events, late, task):
 
 
 def audit(task, output, result, expected):
+    exact_seconds = task.get('horizon_s', EXACT_SECONDS)
     root = output / 'cells' / result['run_id']
     if result['run_id'] != digest(expected) or load_completed(root, expected_run_id=digest(expected)) != result:
         raise ValueError('Completed cell differs from its independently derived identity')
@@ -402,7 +456,7 @@ def audit(task, output, result, expected):
     late = [json.loads(line) for line in (root / 'late-events.jsonl').read_text().splitlines()]
     validate_late_event_identity(late, identity)
     start, accepted, evidence = stage_evidence(result, events, late, task)
-    alarm = result['returncode'] == -signal.SIGALRM and result['solver_elapsed_s'] >= start + EXACT_SECONDS - .001
+    alarm = result['returncode'] == -signal.SIGALRM and result['solver_elapsed_s'] >= start + exact_seconds - .001
     diagnostic_status = 'deadline' if alarm else result['status']
     scoped_result = dict(result, status=diagnostic_status)
     closure, resource = closure_and_resource(scoped_result, accepted, (root / 'stderr.log').read_text(errors='replace'))
@@ -441,7 +495,7 @@ def audit(task, output, result, expected):
             and all(v is True for v in e['metadata_equivalence'].values())
             and e.get('native_instance_sha256') == task['native_instance_sha256']
             and {k: v for k, v in e.get('parameters', {}).items() if k != 'time_limit'} == task['native_parameters']
-            and e.get('parameters', {}).get('time_limit') == EXACT_SECONDS for e in launch)
+            and e.get('parameters', {}).get('time_limit') == exact_seconds for e in launch)
     else:
         checks['backend'] = bool(settings) and all(v.get('backend') == 'CPLEX' and v.get('threads') == 1
                                                  for v in settings.values()) if settings else alarm
@@ -474,7 +528,7 @@ def audit(task, output, result, expected):
         'finished_task': True, 'raw_probe_result_status': result['status'], 'raw_result_status': diagnostic_status,
         'exact_stage_deadline_by_signal': alarm, 'exact_stage_start_process_elapsed_s': start,
         'raw_reported_closure_s': raw_closure, 'reported_closure_s': stage_closure,
-        'capped_reported_closure_s': stage_closure if stage_closure is not None else EXACT_SECONDS,
+        'capped_reported_closure_s': stage_closure if stage_closure is not None else exact_seconds,
         'resource_failure_kind': resource, 'result_issues': result['issues'], 'native_work': work,
         'invalid_candidate_count': sum(c.get('valid') is not True for c in result['validation'].get('candidates', [])),
         'warm_start': exact.get('warm_start'), 'native_result': native,

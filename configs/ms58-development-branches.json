@@ -282,7 +282,7 @@
       "patch": "patches/ms58-experimental/dominance-profile-incremental.patch",
       "sha256": "66a1d4d2a65d9dd2c1f7df17640c09e929ffccf6f5e27c874a0578d41665503e",
       "purpose": "Instrument dominance and correction calls.",
-      "qualification": "Local 5040 gates passed with the same OFF and ON digest. Runtime evaluation pending.",
+      "qualification": "Local 5040 gates passed with the same OFF and ON digest. The 6-cell dominance experiment finished with all 6 audited and no consistency failures. A derived U-opportunity profiler passed local native ON and OFF checks and Astra review. Packaging is ongoing and routing results are pending.",
       "source_verification": {
         "patch_matches_exact_commit_diff": true
       }
@@ -295,7 +295,7 @@
       "patch": "patches/ms58-experimental/correction-on-cplex-domain-batch-incremental.patch",
       "sha256": "5959de45e39c403e92369dfa235bdec4f66ae633bdef6b5a73e5ef8a9659a9cc",
       "purpose": "Combine selected correction-on source with CPLEX domain batching.",
-      "qualification": "Runtime evaluation pending.",
+      "qualification": "Candidate. The integrated 18-cell screen was all usable after an independent absent-f2-metadata re-audit. Against 9d64b7c, all 6 paired runs had the same work and were faster. Mean C201 time was 85.344866 s versus 76.163490 s, and mean RC201 time was 139.408918 s versus 135.623929 s. This limited screen does not establish general superiority.",
       "source_verification": {
         "patch_matches_exact_commit_diff": true
       },
@@ -303,6 +303,19 @@
         "commit": "234d838b4128eda40f11cb53f66005d533cf24af",
         "patch": "patches/ms58-experimental/correction-on-cplex-domain-batch-fixture.patch",
         "sha256": "d5da23daa571216964e17d1b7813d0470772b8612c307dc37d907ed6da3514e8",
+        "patch_matches_exact_commit_diff": true
+      }
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-correction-domain-guard",
+      "base": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+      "commit": "e7f23f71b0bc824af2b4683ac6b9c3c85d992c2f",
+      "branch": "proof-speed/correction-domain-guard",
+      "patch": "patches/ms58-experimental/correction-domain-guard.patch",
+      "sha256": "4f1c1c392b864b0478eae974c5b5f528670c91ed787bc6d7aad90f61d24f258e",
+      "purpose": "Test a partial-correction domain guard as a secondary RC201 hypothesis.",
+      "qualification": "Local candidate. The 275-file source inventory, 416 bitwise full-state cases and 128 oracle cases passed. Grid 5000 and routing validation are pending.",
+      "source_verification": {
         "patch_matches_exact_commit_diff": true
       }
     }

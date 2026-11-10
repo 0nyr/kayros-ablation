@@ -1,0 +1,32 @@
+diff --git a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+index 6714d11b70550c110fec2a13fa3bab6d46a76a0f..cbbe5a31c40a6c8b7b86fab764127d503c4a3539 100644
+--- a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+@@ -497,14 +497,23 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 			if (!elementary_check_relaxation && !is_subset(m->U, l->U)) continue;
+ 			if (!cost_check_relaxation)
+ 			{
+-				// theta = p(l) + cut_cost(l) - p(m) - cut_cost(m) - \sum {sigma(i) : cut_visited[i](m) == 1 && cut_visited[i](l) != 1 }.
+-				double theta = l->p + l->cut_cost - m->p - m->cut_cost;
+-				for (int i: m->cut_nz) if (l->cut_visited[i] != 1) theta -= pp_.sigma[i];
++				// Mirror DominatePieces' unchanged nonempty-domain exits before theta.
++				// Keep scratch reconstruction, since AddPiece replay can change pieces.
++				const bool reject_partial = partial && !l->duration.Empty()
++					&& (epsilon_smaller(l->duration.Domain().right, m->duration.Domain().left)
++						|| (m->duration.Domain().IsPoint() && !l->duration.Domain().IsPoint()));
++				double theta = 0.0;
++				if (!reject_partial)
++				{
++					// theta = p(l) + cut_cost(l) - p(m) - cut_cost(m) - \sum {sigma(i) : cut_visited[i](m) == 1 && cut_visited[i](l) != 1 }.
++					theta = l->p + l->cut_cost - m->p - m->cut_cost;
++					for (int i: m->cut_nz) if (l->cut_visited[i] != 1) theta -= pp_.sigma[i];
++				}
+ 				PWLDominationFunction Delta(l->duration);
+ 				if (partial)
+ 				{
+ 					const double previous_cost = l->min_cost;
+-					Delta.DominatePieces(m->duration, theta);
++					if (!reject_partial) Delta.DominatePieces(m->duration, theta);
+ 					l->duration = normalize_pwl((PWLFunction) Delta); // kayros (M5.7)
+ 					l->rw = l->duration.Domain();
+ 					l->min_cost = min(img(l->duration)) - l->p - l->cut_cost;
