@@ -32,15 +32,26 @@ def proof_evidence(validation, events, horizon, late_events=(), *, expected_inpu
         candidates[candidate['sequence']] = {key: candidate[key] for key in
                                            ['sequence', 'elapsed_s', 'checked_cost']}
         candidates[candidate['sequence']]['routes_sha256'] = digest(candidate['routes'])
-    bounds, closures, preceding = [], [], None
+    bounds, unavailable_bounds, closures, preceding = [], [], [], None
     for event_list, scope in [(events, 'in_budget'), (late_events, 'after_horizon')]:
         for event in event_list:
             bound = event.get('global_lb')
             if isinstance(bound, float) and not math.isfinite(bound):
                 bound = repr(bound)
             if 'global_lb' in event:
-                bounds.append({**{key: event.get(key) for key in ['sequence', 'elapsed_s', 'event']},
-                               'global_lb': bound, 'timing_scope': scope})
+                evidence = {**{key: event.get(key) for key in ['sequence', 'elapsed_s', 'event']},
+                            'global_lb': bound, 'timing_scope': scope}
+                # The pinned bridge emits null for its unset lower-bound sentinel
+                # on search termination. This phase reports no numeric bound.
+                # Null bound/closure events and every other malformed claim
+                # remain in bounds for the existing strict consistency checks.
+                if (bound is None and event.get('event') == 'phase'
+                        and event.get('phase') == 'exact_terminated'
+                        and event.get('source') == 'search_terminated'):
+                    unavailable_bounds.append({**evidence, 'phase': event['phase'], 'source': event['source'],
+                        'reason': 'search_terminated_without_global_lower_bound'})
+                else:
+                    bounds.append(evidence)
             if event.get('event') == 'candidate':
                 preceding = candidates.get(event['sequence']) if scope == 'in_budget' else None
             elif event.get('event') == 'closure':
@@ -48,7 +59,8 @@ def proof_evidence(validation, events, horizon, late_events=(), *, expected_inpu
                     'global_lb': bound, 'status': event.get('status'), 'timing_scope': scope,
                     'preceding_checked_candidate': preceding})
     return {'checked_candidates': list(candidates.values()), 'witness_evidence_audited': True,
-            'global_bound_claims': bounds, 'raw_closure_claims': closures}
+            'global_bound_claims': bounds, 'unavailable_global_bound_events': unavailable_bounds,
+            'raw_closure_claims': closures}
 
 
 def validate_late_event_identity(events, identity):
