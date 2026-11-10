@@ -1,0 +1,7 @@
+{"defaults": {"n": 100, "memory_mb": 16384, "rep": 1},
+ "cells": [
+  {"id": "RC105-kayros-cold-234d838", "kind": "kayros", "mode": "cold", "venv": "/home/frascous/ms58-correction-domain-batch/venv-correction-on-domain-batch-cplex", "env": {}, "arm": "kayros-cold-234d838", "instance": "RC105", "time_limit_s": 300},
+  {"id": "RC105-lera-f2", "kind": "lera", "arm": "lera-f2", "instance": "RC105", "time_limit_s": 300},
+  {"id": "RC105-kayros-cold-234d838-tl20", "kind": "kayros", "mode": "cold", "venv": "/home/frascous/ms58-correction-domain-batch/venv-correction-on-domain-batch-cplex", "env": {}, "arm": "kayros-cold-234d838-tl20", "instance": "RC105", "time_limit_s": 20},
+  {"id": "RC105-lera-f2-tl20", "kind": "lera", "arm": "lera-f2-tl20", "instance": "RC105", "time_limit_s": 20}
+ ]}

@@ -1,0 +1,4 @@
+{"defaults": {"n": 100, "memory_mb": 16384, "rep": 1, "time_limit_s": 120},
+ "cells": [
+  {"id": "C101-kayros-cold-ms61-base-234d838", "kind": "kayros", "mode": "cold", "venv": "/home/frascous/ms61-bpc/venvs/base-234d838", "env": {}, "arm": "kayros-cold-ms61-base-234d838", "instance": "C101"}
+ ]}
