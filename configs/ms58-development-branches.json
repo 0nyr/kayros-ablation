@@ -88,6 +88,223 @@
       "branch": "proof-speed/canonical-normalize",
       "patch": "patches/ms58-experimental/canonical-normalize.patch",
       "sha256": "8b98cc35d5f6d14e263ebed7db75a26e2a53b87fc739592451e5d843d350e119"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-best",
+      "base": "07879253091fe9e895cc8071aa69ccd0b2310634",
+      "commit": "327e481713e1b9a3187fda2fc9f10f8d9d75b0c5",
+      "branch": "proof-speed/best",
+      "patch": "patches/ms58-experimental/canonical-point.patch",
+      "sha256": "db4c10703514c458052022a1b85c8a1ccfdb404db83c158143dbfc13fc3e05e2",
+      "purpose": "Integrate canonical BPC valuation reductions with the scalar-point choice repair as a Dabia comparison control.",
+      "qualification": "Comparison source. This inventory does not approve production integration or establish benchmark improvement.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true,
+        "patch_applies_to_declared_base_index": true
+      }
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-dominance-scratch",
+      "base": "327e481713e1b9a3187fda2fc9f10f8d9d75b0c5",
+      "commit": "e27f288d7b504c2e8e9f2b8d9086ba0b7da69f02",
+      "branch": "proof-speed/dominance-scratch",
+      "patch": "patches/ms58-experimental/dominance-scratch.patch",
+      "sha256": "7e338531032aaa2c4c74694f46c5992fd35ae7cc2f31dbf1b602836854469e12",
+      "purpose": "Isolate reuse of dominance scratch storage within a pricing task for the bounded Dabia candidate screen.",
+      "qualification": "Experimental hypothesis, not selected for production or the final panel by this inventory.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true,
+        "patch_applies_to_declared_base_index": true
+      },
+      "documentation_only_followup": {
+        "commit": "18ca897e182a220559c7a271a3ed2e5259654324",
+        "changed_files": [
+          "docs/ms58-dominance-scratch.md"
+        ],
+        "solver_source_commit": "e27f288d7b504c2e8e9f2b8d9086ba0b7da69f02"
+      }
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-safe-correction",
+      "base": "327e481713e1b9a3187fda2fc9f10f8d9d75b0c5",
+      "commit": "a63cf65d3f7e90e4c310ffcedd7a6dabfae0ce3d",
+      "branch": "proof-speed/safe-correction",
+      "patch": "patches/ms58-experimental/safe-correction.patch",
+      "sha256": "2afb05c4ceedfbdd1eb9157f24763824bb44d6bfb60a49f9b04d6b31364480f1",
+      "purpose": "Isolate label correction with repaired dominance and merge indexes, retained parent ownership, and safe lazy deferral.",
+      "qualification": "Opt-in experimental screen source. Correction is disabled by default. This is not a production integration.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true,
+        "patch_applies_to_declared_base_index": true
+      },
+      "diagnostic_environment": {
+        "KAYROS_DIAGNOSTIC_CORRECTING": "1"
+      }
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-safe-correction",
+      "base": "a63cf65d3f7e90e4c310ffcedd7a6dabfae0ce3d",
+      "commit": "151a4ef45595eb0d9c29dbc4df1971c978779064",
+      "branch": "proof-speed/safe-correction",
+      "patch": "patches/ms58-experimental/safe-correction-fixtures.patch",
+      "sha256": "382aaff70e21f0c3323ce80ae78d2aa97c6b4cf6be232bb4ae7d67eb2ffac9b0",
+      "purpose": "Extend synthetic fixtures to exercise lazy deferral through resumption and require actual correction coverage.",
+      "qualification": "Test-only follow-up. It changes no solver source and establishes no runtime result by itself.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true,
+        "patch_applies_to_declared_base_index": true
+      },
+      "solver_source_commit": "a63cf65d3f7e90e4c310ffcedd7a6dabfae0ce3d"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-correction-on",
+      "base": "07879253091fe9e895cc8071aa69ccd0b2310634",
+      "commit": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+      "branch": "proof-speed/correction-on",
+      "patch": "patches/ms58-experimental/correction-on-full.patch",
+      "sha256": "18b453c73422771ce0a2c6c5cbd6b934b62bcded0566c9c495d253106df28e87",
+      "purpose": "Prepare a final-panel candidate with correction enabled by default, truthful native settings, and rejection of correction with eager extension.",
+      "qualification": "Selected for the development panel after the limited screen. Four-case validation and native correction-on checks passed. This selection establishes no overall superiority or production integration.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true,
+        "patch_applies_to_declared_base_index": true
+      },
+      "diagnostic_environment": {},
+      "effective_defaults": {
+        "label_correction": true,
+        "lazy_extension": true
+      },
+      "fixture_source_commit": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+      "validation_report": "outputs/ms58/dabia-20261110/validation-correction-on/complete.json",
+      "native_report": "outputs/ms58/dabia-20261110/native/correction-on/complete.json"
+    },
+    {
+      "worktree": "$WORKSPACE/lera-proof-eps-parity",
+      "base": "f2c9e205bd1ecc9afb45d5efe7fcb0df881f2b33",
+      "commit": "fe8e927cf5a7ade98ce0d698b4af402a0caa5652",
+      "branch": "proof-speed/eps-parity",
+      "patch": "patches/ms58-experimental/lera-eps-parity.patch",
+      "sha256": "23b36405d306a839cdcbe5c5893057bdb45aee5e87b30d7790d2aa5c0d59f061",
+      "purpose": "Isolate the shared algorithm-epsilon difference in Lera as a diagnostic contrast to the mandatory minimal reference.",
+      "qualification": "Build succeeded. Diagnostic source only, with f2c9e205bd1ecc9afb45d5efe7fcb0df881f2b33 retained as the fixed comparison control. Runtime evaluation remains pending.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true,
+        "patch_applies_to_declared_base_index": true
+      },
+      "required_comparison_control_commit": "f2c9e205bd1ecc9afb45d5efe7fcb0df881f2b33"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-extension-profile",
+      "base": "07879253091fe9e895cc8071aa69ccd0b2310634",
+      "commit": "4643f2159e6769db8246af67a9d559f70ae2105b",
+      "branch": "proof-speed/extension-profile",
+      "patch": "patches/ms58-experimental/extension-profile-full.patch",
+      "sha256": "b02ce28244c0cd0be159ea54060ad35eea84be34c9dad87028392e98d60ba2ca",
+      "purpose": "Add isolated sampled extension-stage profiling to identify where labeling time is spent.",
+      "qualification": "Built with native gates passed and a 6-cell diagnostic completed. Instrumentation is not a speed candidate.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true,
+        "patch_applies_to_declared_base_index": true
+      },
+      "cmake_diagnostic_option": {
+        "KAYROS_EXTENSION_PROFILING": "ON"
+      },
+      "source_identity_record": "outputs/ms58/dabia-20261110/extension-profile-source-identity.json"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-cplex-domain-batch",
+      "base": "07879253091fe9e895cc8071aa69ccd0b2310634",
+      "commit": "cd5dee0b2543e9aa65718889379bedc6181d3161",
+      "branch": "proof-speed/cplex-domain-batch",
+      "patch": "patches/ms58-experimental/cplex-domain-batch-full.patch",
+      "sha256": "057fe3dec78bbbbf38cb629994a78c6624fafd85e9177fdf29f5adca976a455c",
+      "purpose": "Stage guarded batching of CPLEX variable-domain changes while preserving the existing LP and MIP domain transitions.",
+      "qualification": "Built. Native fixture checks passed 17 cases using fixture-only follow-up 1f5102b0997f277a4d5d8e20c4a422d0bb70a4e6, which leaves production source unchanged. Solver timing is pending.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true,
+        "patch_applies_to_declared_base_index": true
+      },
+      "additional_patches": [
+        {
+          "base": "327e481713e1b9a3187fda2fc9f10f8d9d75b0c5",
+          "patch": "patches/ms58-experimental/kayros-cplex-domain-batch.patch",
+          "sha256": "d236383aa5e839d0cd1fa364f439e14c100847b61694bfff87d9bc78a9282b07",
+          "patch_matches_exact_commit_diff": true,
+          "patch_applies_to_declared_base_index": true
+        }
+      ],
+      "fixture_only_commit": "1f5102b0997f277a4d5d8e20c4a422d0bb70a4e6"
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-remove-discarded-restriction",
+      "base": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+      "commit": "2ea97a0d957165e19c925d07165eaf5cf5513ef1",
+      "branch": "proof-speed/remove-discarded-restriction",
+      "patch": "patches/ms58-experimental/remove-discarded-restriction.patch",
+      "sha256": "577e57779cd37986369e2c7213b0182fb63a10d0246d8263261bc1de9260af33",
+      "purpose": "Remove one discarded duration restriction from the correction-on candidate.",
+      "qualification": "Experimental candidate with runtime evaluation pending.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true
+      }
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-warm-incumbent-only",
+      "base": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+      "commit": "74ed81486d2cd365061bdbce02264f6845d8ad30",
+      "branch": "proof-speed/warm-incumbent-only",
+      "patch": "patches/ms58-experimental/warm-incumbent-only-incremental.patch",
+      "sha256": "7020472cbb97f40b8500276b0694daad8691053d02a41baa4720025b11c24a35",
+      "purpose": "Warm incumbent-only handoff candidate.",
+      "qualification": "Local 7-unit checks and Astra review passed. Runtime evaluation pending.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true
+      }
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-warm-dedup",
+      "base": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+      "commit": "391954aef4c131ad759d2862afc28458c3144026",
+      "branch": "proof-speed/warm-dedup",
+      "patch": "patches/ms58-experimental/warm-dedup-incremental.patch",
+      "sha256": "f5425cf8f846d4e968a89bc2cf1754ee87247f9f1a25839988c950e5bd6fc600",
+      "purpose": "Warm-column deduplication candidate.",
+      "qualification": "Local 7-unit checks and Astra review passed. Runtime evaluation pending.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true
+      }
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-dominance-profile",
+      "base": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+      "commit": "a2dcf8870c17e7edeccb472b27bee0e544eec997",
+      "branch": "proof-speed/dominance-profile",
+      "patch": "patches/ms58-experimental/dominance-profile-incremental.patch",
+      "sha256": "66a1d4d2a65d9dd2c1f7df17640c09e929ffccf6f5e27c874a0578d41665503e",
+      "purpose": "Instrument dominance and correction calls.",
+      "qualification": "Local 5040 gates passed with the same OFF and ON digest. Runtime evaluation pending.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true
+      }
+    },
+    {
+      "worktree": "$WORKSPACE/kayros-proof-correction-on-cplex-domain-batch",
+      "base": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+      "commit": "ef0e18288883dd7b4c2a5941105176d6ff312cfd",
+      "branch": "proof-speed/correction-on-cplex-domain-batch",
+      "patch": "patches/ms58-experimental/correction-on-cplex-domain-batch-incremental.patch",
+      "sha256": "5959de45e39c403e92369dfa235bdec4f66ae633bdef6b5a73e5ef8a9659a9cc",
+      "purpose": "Combine selected correction-on source with CPLEX domain batching.",
+      "qualification": "Runtime evaluation pending.",
+      "source_verification": {
+        "patch_matches_exact_commit_diff": true
+      },
+      "fixture_only_followup": {
+        "commit": "234d838b4128eda40f11cb53f66005d533cf24af",
+        "patch": "patches/ms58-experimental/correction-on-cplex-domain-batch-fixture.patch",
+        "sha256": "d5da23daa571216964e17d1b7813d0470772b8612c307dc37d907ed6da3514e8",
+        "patch_matches_exact_commit_diff": true
+      }
     }
   ],
   "point_addition_comment_only_followup": "ea6097e"

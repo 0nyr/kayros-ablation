@@ -1,0 +1,1464 @@
+diff --git a/cpp/lera/CMakeLists.txt b/cpp/lera/CMakeLists.txt
+index 53f18f9fd2fdbebca911650b46e0077c304c8947..bf4ed4cf5f46073acb22d550c5065fd73cca9978 100644
+--- a/cpp/lera/CMakeLists.txt
++++ b/cpp/lera/CMakeLists.txt
+@@ -44,6 +44,12 @@ add_library(lera STATIC ${LERA_GOC_SOURCES} ${LERA_NYR_SOURCES} ${LERA_MAIN_SOUR
+ 
+ # kayros' C++23 baseline; the vendored code predates it (upstream used C++26
+ # permissively, but nothing needs it — 23 keeps GCC 13 toolchains buildable).
++# Experimental diagnostics require a separate build. PUBLIC preserves bridge layouts.
++option(KAYROS_DOMINANCE_PROFILING "Compile experimental sampled dominance diagnostics" OFF)
++if(KAYROS_DOMINANCE_PROFILING)
++    target_compile_definitions(lera PUBLIC KAYROS_DOMINANCE_PROFILING=1)
++endif()
++
+ target_compile_features(lera PUBLIC cxx_std_23)
+ set_target_properties(lera PROPERTIES POSITION_INDEPENDENT_CODE ON)
+ # Same bit-identical arithmetic policy as kayros' _core.
+diff --git a/cpp/lera/main/include/labeling/bidirectional_labeling.h b/cpp/lera/main/include/labeling/bidirectional_labeling.h
+index 734ad72a7997f4700d37f2391ce8f0bca56df394..dd59f3077f2d8fdf61070c627779dc5fb10c92cd 100644
+--- a/cpp/lera/main/include/labeling/bidirectional_labeling.h
++++ b/cpp/lera/main/include/labeling/bidirectional_labeling.h
+@@ -59,6 +59,11 @@ public:
+ 	
+ private:
+ 	friend struct CorrectionInvariantTest;
++#ifdef KAYROS_DOMINANCE_PROFILING
++	friend struct DominanceProfileTest;
++	DominanceProfile dominance_profile_;
++#endif
++
+ 	void RefreshCorrectedMergeLabels(int direction);
+ 
+ 	// Sets the labeling level flags based on the given level.
+diff --git a/cpp/lera/main/include/labeling/dominance_profile.h b/cpp/lera/main/include/labeling/dominance_profile.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..e92bfc98895b767730a646ede6741c04f01046c5
+--- /dev/null
++++ b/cpp/lera/main/include/labeling/dominance_profile.h
+@@ -0,0 +1,203 @@
++#pragma once
++
++// Experimental diagnostic. This header and every call site vanish in OFF builds.
++#ifdef KAYROS_DOMINANCE_PROFILING
++#include <array>
++#include <charconv>
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <stdexcept>
++#include <string>
++#include "goc/lib/json.hpp"
++
++namespace solver {
++class DominanceProfile {
++public:
++    using Clock = std::chrono::steady_clock;
++    using Json = nlohmann::json;
++    enum class Counter { CandidatePieces, CandidateDemandFloorSum, CandidateBuckets, DepotShortcut, Buckets, DemandBreak, Labels, CostBreak, SubsetTests, SubsetPass, SubsetReject, ThetaTerms, ThetaSubtractions, ScratchFunctions, ScratchPieces, PartialCalls, PartialTrue, PartialFalse, FullCalls, FullTrue, FullFalse, Materializations, Normalizations, CostChanges, Retirements, Sorts, MergeDirty, MergeUnique, MergeEntries, MergeLabels, MergeRetirements, MergeSorts, CompletionCalls, CompletionPieces, PartialEmpty, PartialBeforeDomain, PartialPointDomain, PartialPairIterations, PartialSkipDominatorBefore, PartialSkipCandidateBefore, PartialSkipCandidateEnd, PartialSkipDominatorEnd, PartialComparisons, PartialScalar, PartialChoice, PartialJump, PartialErase, PartialShrinkLeft, PartialShrinkRight, PartialSplit, FullEmpty, FullBeforeDomain, FullPairIterations, FullSearchPieces, FullGap, FullComparisons, FullScalar, FullChoice, FullJump, FullValueReject, Count };
++    enum class Kind { Dominance, Correction, MergeMaintenance };
++    enum class Stage { Construction, Scan, Materialization, Count };
++    struct Counters {
++        std::array<uint64_t, static_cast<size_t>(Counter::Count)> values{};
++        void Add(Counter c, uint64_t n = 1) { values[static_cast<size_t>(c)] += n; }
++    };
++    struct Outcome {
++        uint64_t finished = 0, sampled_finished = 0, sampled_ns = 0;
++        std::array<uint64_t, static_cast<size_t>(Stage::Count)> stage_ns{};
++        Counters counters;
++    };
++    struct Operation {
++        uint64_t attempts = 0, sampled_attempts = 0;
++        // Index 0 survives (or removes no existing label), index 1 eliminates.
++        std::array<Outcome, 2> outcomes{};
++    };
++    struct Direction {
++        std::array<Operation, 3> operations{};
++        DominanceProfile* owner = nullptr;
++    };
++private:
++    FILE* file_ = nullptr;
++    uint64_t stride_ = 1009, offset_ = 0, call_ = 0;
++    std::array<Direction, 2> directions_{};
++    bool active_ = false;
++    Clock::time_point started_{}, last_output_{};
++    static uint64_t Integer(const char* name, uint64_t fallback) {
++        const char* value = std::getenv(name);
++        if (!value) return fallback;
++        uint64_t result = 0;
++        const auto end = value + std::strlen(value);
++        const auto parsed = std::from_chars(value, end, result);
++        if (parsed.ec != std::errc{} || parsed.ptr != end)
++            throw std::runtime_error(std::string("Invalid dominance profile integer: ") + name);
++        return result;
++    }
++    static uint64_t Ns(Clock::duration value) {
++        return std::chrono::duration_cast<std::chrono::nanoseconds>(value).count();
++    }
++    static Json DirectionJson(const Direction& direction) {
++        static constexpr const char* counter_names[] = { "candidate_pieces", "candidate_demand_floor_sum", "candidate_buckets", "depot_shortcut", "buckets", "demand_break", "labels", "cost_break", "subset_tests", "subset_pass", "subset_reject", "theta_terms", "theta_subtractions", "scratch_functions", "scratch_pieces", "partial_calls", "partial_true", "partial_false", "full_calls", "full_true", "full_false", "materializations", "normalizations", "cost_changes", "retirements", "sorts", "merge_dirty", "merge_unique", "merge_entries", "merge_labels", "merge_retirements", "merge_sorts", "completion_calls", "completion_pieces", "partial_empty", "partial_before_domain", "partial_point_domain", "partial_pair_iterations", "partial_skip_dominator_before", "partial_skip_candidate_before", "partial_skip_candidate_end", "partial_skip_dominator_end", "partial_comparisons", "partial_scalar", "partial_choice", "partial_jump", "partial_erase", "partial_shrink_left", "partial_shrink_right", "partial_split", "full_empty", "full_before_domain", "full_pair_iterations", "full_search_pieces", "full_gap", "full_comparisons", "full_scalar", "full_choice", "full_jump", "full_value_reject" };
++        static constexpr const char* kind_names[] = {"dominance", "correction", "merge_maintenance"};
++        static constexpr const char* stage_names[] = {"construction", "scan", "materialization"};
++        static_assert(std::size(counter_names) == static_cast<size_t>(Counter::Count));
++        Json result = Json::object();
++        for (size_t k = 0; k < direction.operations.size(); ++k) {
++            const auto& operation = direction.operations[k];
++            Json entry = {{"attempts", operation.attempts}, {"sampled_attempts", operation.sampled_attempts}};
++            for (size_t o = 0; o < operation.outcomes.size(); ++o) {
++                const auto& outcome = operation.outcomes[o];
++                Json value = {{"finished", outcome.finished}, {"sampled_finished", outcome.sampled_finished},
++                    {"sampled_ns", outcome.sampled_ns}};
++                for (size_t s = 0; s < outcome.stage_ns.size(); ++s)
++                    value["sampled_stage_ns"][stage_names[s]] = outcome.stage_ns[s];
++                for (size_t c = 0; c < outcome.counters.values.size(); ++c)
++                    value["counters"][counter_names[c]] = outcome.counters.values[c];
++                entry[o ? "eliminated" : "survived"] = std::move(value);
++            }
++            result[kind_names[k]] = std::move(entry);
++        }
++        return result;
++    }
++    Json Snapshot(const char* event, bool returned) const {
++        return {{"event", event}, {"pricing_returned", returned},
++            {"elapsed_wall_ns", Ns(Clock::now() - started_)},
++            {"forward", DirectionJson(directions_[0])}, {"backward", DirectionJson(directions_[1])}};
++    }
++    void Write(Json record) {
++        record["schema"] = "kayros-ms58-dominance-profile-v1";
++        record["diagnostic_only"] = true;
++        record["call"] = call_;
++        const auto line = record.dump() + '\n';
++        if (std::fwrite(line.data(), 1, line.size(), file_) != line.size() || std::fflush(file_) != 0)
++            throw std::runtime_error("Cannot write dominance profile");
++    }
++public:
++    DominanceProfile() {
++        const char* path = std::getenv("KAYROS_DOMINANCE_PROFILE");
++        if (!path || !*path) return;
++        stride_ = Integer("KAYROS_DOMINANCE_PROFILE_STRIDE", 1009);
++        offset_ = Integer("KAYROS_DOMINANCE_PROFILE_OFFSET", 0);
++        if (!stride_ || offset_ >= stride_)
++            throw std::runtime_error("Dominance profile requires stride > 0 and offset < stride");
++        file_ = std::fopen(path, "wx");
++        if (!file_) throw std::runtime_error("Cannot exclusively create dominance profile");
++        try {
++            Write({{"event", "profile_open"}, {"base_source", "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56"},
++                {"sample_stride", stride_}, {"sample_offset", offset_},
++                {"sample_rule", "zero_based_call_mod_stride_equals_offset_per_kind_per_direction_per_pricing"},
++                {"clock", "steady_clock"}, {"timer_units", "ns"},
++                {"timing_scope", "sampled call wall time partition including in-call instrumentation; finish aggregation and JSON writes excluded"},
++                {"progress_minimum_seconds", 5},
++                {"unfinished_rule", "no pricing_end means unfinished"},
++                {"outcome_rule", "dominance eliminated means candidate fully eliminated; correction and maintenance eliminated means at least one label retired"}});
++        } catch (...) { std::fclose(file_); file_ = nullptr; throw; }
++    }
++    ~DominanceProfile() { if (file_) std::fclose(file_); }
++    DominanceProfile(const DominanceProfile&) = delete;
++    DominanceProfile& operator=(const DominanceProfile&) = delete;
++    bool Enabled() const { return file_ != nullptr; }
++    Direction* GetDirection(int direction) { return Enabled() ? &directions_.at(direction) : nullptr; }
++    void Begin(Json context) {
++        if (!Enabled()) return;
++        if (active_) throw std::runtime_error("Dominance profile pricing reentry");
++        directions_ = {};
++        for (auto& direction : directions_) direction.owner = this;
++        ++call_;
++        active_ = true;
++        started_ = last_output_ = Clock::now();
++        auto record = Snapshot("pricing_begin", false);
++        record["context"] = std::move(context);
++        Write(std::move(record));
++    }
++    void MaybeProgress() {
++        if (!active_) return;
++        const auto now = Clock::now();
++        if (now - last_output_ < std::chrono::seconds(5)) return;
++        Write(Snapshot("pricing_progress", false));
++        last_output_ = now;
++    }
++    void End(Json native_log, size_t returned_routes, size_t pool_size) {
++        if (!Enabled()) return;
++        if (!active_) throw std::runtime_error("Dominance profile end without begin");
++        auto record = Snapshot("pricing_end", true);
++        record["native_status"] = native_log.at("status");
++        record["native_log"] = std::move(native_log);
++        record["returned_routes"] = returned_routes;
++        record["pool_size"] = pool_size;
++        Write(std::move(record));
++        active_ = false;
++    }
++    class Episode {
++        DominanceProfile* owner_ = nullptr;
++        Operation* operation_ = nullptr;
++        Counters counters_;
++        bool sampled_ = false, finished_ = false;
++        Stage stage_ = Stage::Scan;
++        Clock::time_point start_{}, last_{};
++        std::array<uint64_t, static_cast<size_t>(Stage::Count)> stage_ns_{};
++    public:
++        Episode(Direction* direction, Kind kind) {
++            if (!direction || !direction->owner || !direction->owner->active_) return;
++            owner_ = direction->owner;
++            operation_ = &direction->operations[static_cast<size_t>(kind)];
++            const auto ordinal = operation_->attempts++;
++            sampled_ = ordinal % owner_->stride_ == owner_->offset_;
++            if (sampled_) { ++operation_->sampled_attempts; start_ = last_ = Clock::now(); }
++        }
++        Episode(const Episode&) = delete;
++        Episode& operator=(const Episode&) = delete;
++        bool Sampled() const { return sampled_; }
++        Counters* Accumulator() { return operation_ ? &counters_ : nullptr; }
++        void Add(Counter counter, uint64_t count = 1) { if (operation_ && counter != Counter::Count) counters_.Add(counter, count); }
++        bool Result(bool result, Counter yes, Counter no) { Add(result ? yes : no); return result; }
++        void Switch(Stage stage) {
++            if (sampled_) {
++                const auto now = Clock::now();
++                stage_ns_[static_cast<size_t>(stage_)] += Ns(now - last_);
++                last_ = now;
++            }
++            stage_ = stage;
++        }
++        void Finish(bool eliminated) {
++            if (!operation_ || finished_) return;
++            auto& outcome = operation_->outcomes[eliminated ? 1 : 0];
++            if (sampled_) {
++                const auto now = Clock::now();
++                stage_ns_[static_cast<size_t>(stage_)] += Ns(now - last_);
++                ++outcome.sampled_finished;
++                outcome.sampled_ns += Ns(now - start_);
++                for (size_t s = 0; s < stage_ns_.size(); ++s) outcome.stage_ns[s] += stage_ns_[s];
++            }
++            ++outcome.finished;
++            for (size_t c = 0; c < counters_.values.size(); ++c) outcome.counters.values[c] += counters_.values[c];
++            finished_ = true;
++            // Flush only after the sample timer stops. Destruction never finishes a call.
++            if (sampled_) owner_->MaybeProgress();
++        }
++    };
++};
++} // namespace solver
++#endif
+diff --git a/cpp/lera/main/include/labeling/monodirectional_labeling.h b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+index 0cc5b86f7f57e0ec7e7262777a2997811fce5bbb..cc83ff070f2f0fde6d8d55bbc8aed4a04c6f435e 100644
+--- a/cpp/lera/main/include/labeling/monodirectional_labeling.h
++++ b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+@@ -18,6 +18,11 @@
+ #include "bcp/pricing_problem.h"
+ #include "ng_neighborhoods.h"
+ 
++#ifdef KAYROS_DOMINANCE_PROFILING
++#include "dominance_profile.h"
++#endif
++
++
+ namespace solver
+ {
+ 
+@@ -75,6 +80,11 @@ public:
+ 	
+ private:
+ 	friend class BidirectionalLabeling;
++#ifdef KAYROS_DOMINANCE_PROFILING
++	friend struct DominanceProfileTest;
++	DominanceProfile::Direction* dominance_profile_ = nullptr;
++#endif
++
+ 	friend struct CorrectionInvariantTest;
+ 	// Removed labels can remain parents of queued or processed labels.
+ 	// Retain their ownership until the whole pricing call is cleaned.
+diff --git a/cpp/lera/main/include/labeling/pwl_domination_function.h b/cpp/lera/main/include/labeling/pwl_domination_function.h
+index 986937af37dce2ddacebe4dbc368e9bcaf49e602..220afcc9115d413a70adc8aad8b6188e900ab7e2 100644
+--- a/cpp/lera/main/include/labeling/pwl_domination_function.h
++++ b/cpp/lera/main/include/labeling/pwl_domination_function.h
+@@ -10,6 +10,10 @@
+ #include <vector>
+ 
+ #include "goc/goc.h"
++#ifdef KAYROS_DOMINANCE_PROFILING
++#include "dominance_profile.h"
++#endif
++
+ 
+ namespace solver
+ {
+@@ -41,6 +45,13 @@ public:
+ 	// Precondition: f1, f2 are continuous.
+ 	bool IsAlwaysDominated(const goc::PWLFunction& f2, double delta = 0);
+ 
++#ifdef KAYROS_DOMINANCE_PROFILING
++public:
++	void SetProfile(DominanceProfile::Counters* counters) { profile_ = counters; }
++private:
++	DominanceProfile::Counters* profile_ = nullptr;
++#endif
++
+ private:
+ 	// Removes piece i. (leaves domain_ and image_ inconsistent).
+ 	// prev_i: index of the previous element of i.
+diff --git a/cpp/lera/main/src/labeling/bidirectional_labeling.cpp b/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
+index 173f6de6753b2849055497eb7fe87c68e15c0107..cf3ea37032364fce4f84f1d214b3b59ec9dc6133 100644
+--- a/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
+@@ -288,6 +288,36 @@ BLBExecutionLog BidirectionalLabeling::Run(
+ 	lbl_[0].unreachable_strengthened = lbl_[1].unreachable_strengthened = unreachable_strengthened;
+ 	lbl_[0].correcting = lbl_[1].correcting = correcting;
+ 	
++#ifdef KAYROS_DOMINANCE_PROFILING
++	const size_t profile_initial_routes = R->size();
++	if (dominance_profile_.Enabled())
++	{
++		for (int d: {0, 1}) {
++			lbl_[d].dominance_profile_ = dominance_profile_.GetDirection(d);
++		}
++		static constexpr const char* level_names[] = {
++			"HeuristicCost", "HeuristicElementarity", "HeuristicNG", "Exact"
++		};
++		nlohmann::json direction_flags = nlohmann::json::array();
++		for (int d: {0, 1}) direction_flags.push_back({
++			{"cross", lbl_[d].cross}, {"process_limit", lbl_[d].process_limit},
++			{"ng_routes_relaxation", lbl_[d].ng_routes_relaxation}, {"t_m", lbl_[d].t_m}
++		});
++		dominance_profile_.Begin({
++			{"level", level_names[static_cast<int>(level)]}, {"pricing_problem", pp_},
++			{"closing_state", closing_state}, {"merge_start", merge_start},
++			{"partial", partial}, {"limited_extension", limited_extension},
++			{"lazy_extension", lazy_extension}, {"unreachable_strengthened", unreachable_strengthened},
++			{"sort_by_cost", sort_by_cost}, {"correcting", correcting}, {"symmetric", symmetric},
++			{"elementary_check_relaxation", elementary_check_relaxation},
++			{"cost_check_relaxation", cost_check_relaxation},
++			{"step_exact_arithmetic", goc::step_exact_arithmetic()}, {"step_pool", step_pool_},
++			{"solution_limit", solution_limit}, {"time_limit_seconds", time_limit.Amount(DurationUnit::Seconds)},
++			{"directions", direction_flags}
++		});
++	}
++#endif
++
+ 	BLBExecutionLog log(true);
+ 	Stopwatch rolex(false), merge_rolex(false);
+ 	run_deadline_ = Deadline::In(time_limit); // (kayros M5.2)
+@@ -327,6 +357,10 @@ BLBExecutionLog BidirectionalLabeling::Run(
+ 			if (MemoryMonitor::Exceeded()) { log.status = BLBStatus::MemoryLimitReached; break; }
+ 			lbl_[d].time_limit = time_limit - rolex.Peek(); // Set time limit.
+ 			auto P = lbl_[d].Run(&q[d], mlb_log[d]);
++#ifdef KAYROS_DOMINANCE_PROFILING
++			if (dominance_profile_.Enabled()) dominance_profile_.MaybeProgress();
++#endif
++
+ 			if (correcting)
+ 			{
+ 				merge_rolex.Reset().Resume();
+@@ -427,30 +461,61 @@ BLBExecutionLog BidirectionalLabeling::Run(
+ 		}
+ 	}
+ 	
++#ifdef KAYROS_DOMINANCE_PROFILING
++	if (dominance_profile_.Enabled()) dominance_profile_.End(log.ToJSON(), R->size() - profile_initial_routes, pool_size());
++#endif
+ 	return log;
+ }
+ 
+ void BidirectionalLabeling::RefreshCorrectedMergeLabels(int direction)
+ {
+ 	auto& changed = lbl_[direction].corrected_merge_buckets_;
++#ifdef KAYROS_DOMINANCE_PROFILING
++	using DP = DominanceProfile;
++	using C = DP::Counter;
++	DP::Episode profile(lbl_[direction].dominance_profile_, DP::Kind::MergeMaintenance);
++	profile.Add(C::MergeDirty, changed.size());
++	size_t profile_removed = 0;
++#endif
++
+ 	if (!closing_state)
+ 	{
+ 		std::sort(changed.begin(), changed.end());
+ 		changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
++#ifdef KAYROS_DOMINANCE_PROFILING
++		profile.Add(C::MergeUnique, changed.size());
++#endif
++
+ 		for (const auto& [vertex, demand] : changed)
+ 			for (auto& entry : M[direction][vertex])
+ 			{
++#ifdef KAYROS_DOMINANCE_PROFILING
++				profile.Add(C::MergeEntries);
++#endif
+ 				if (entry.first < demand) continue;
+ 				if (entry.first > demand) break;
+ 				auto& labels = entry.second;
++#ifdef KAYROS_DOMINANCE_PROFILING
++				profile.Add(C::MergeLabels, labels.size());
++				const auto profile_before = labels.size();
++#endif
++
+ 				labels.erase(std::remove_if(labels.begin(), labels.end(),
+ 					[](Label* label) { return label->duration.Empty(); }), labels.end());
++#ifdef KAYROS_DOMINANCE_PROFILING
++				profile.Add(C::MergeRetirements, profile_before - labels.size());
++				profile_removed += profile_before - labels.size();
++				profile.Add(C::MergeSorts);
++#endif
+ 				std::stable_sort(labels.begin(), labels.end(),
+ 					[](Label* a, Label* b) { return a->min_cost < b->min_cost; });
+ 				break;
+ 			}
+ 	}
+ 	changed.clear();
++#ifdef KAYROS_DOMINANCE_PROFILING
++	profile.Finish(profile_removed != 0);
++#endif
+ }
+ 
+ void BidirectionalLabeling::IterativeMerge(Label* l, const MonodirectionalLabeling::DominanceStructure& L)
+diff --git a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+index 6714d11b70550c110fec2a13fa3bab6d46a76a0f..6a69e02d0c8298ad94e0859fd7c0d4dbcf4ecb00 100644
+--- a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+@@ -424,30 +424,92 @@ Label* MonodirectionalLabeling::ExtensionStep(const LazyLabel& ll) const
+ 
+ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ {
++#ifdef KAYROS_DOMINANCE_PROFILING
++	using DP = DominanceProfile;
++	using C = DP::Counter;
++	DP::Episode profile(dominance_profile_, DP::Kind::Dominance);
++	profile.Add(C::CandidatePieces, l->duration.PieceCount());
++	profile.Add(C::CandidateDemandFloorSum, static_cast<uint64_t>(floor(l->q)));
++	profile.Add(C::CandidateBuckets, U[l->v].end() - U[l->v].begin());
++#endif
+ 	// If full route, then it is dominated if the reduced cost is bigger than or equal to zero.
++#ifdef KAYROS_DOMINANCE_PROFILING
++	if (l->v == vrp_.d) {
++		profile.Add(C::DepotShortcut);
++		const bool eliminated = epsilon_bigger_equal(l->min_cost, 0.0);
++		profile.Finish(eliminated);
++		return eliminated;
++	}
++#else
+ 	if (l->v == vrp_.d) return epsilon_bigger_equal(l->min_cost, 0.0);
++#endif
+ 	
+ 	// Create function Delta which will be dominated.
++#ifdef KAYROS_DOMINANCE_PROFILING
++	profile.Switch(DP::Stage::Construction);
++	profile.Add(C::ScratchFunctions);
++	profile.Add(C::ScratchPieces, l->duration.PieceCount());
++#endif
+ 	PWLDominationFunction Delta = l->duration;
++#ifdef KAYROS_DOMINANCE_PROFILING
++	Delta.SetProfile(profile.Accumulator());
++	profile.Switch(DP::Stage::Scan);
++#endif
++
+ 	double l_beta = beta(l, partial);
+ 	trace_domination_detail = trace::on() && trace::prefix_len(l) > 0;
+ 	
+ 	for (auto& demand_entry : U[l->v])
+ 	{
++#ifdef KAYROS_DOMINANCE_PROFILING
++		profile.Add(C::Buckets);
++#endif
++#ifdef KAYROS_DOMINANCE_PROFILING
++		if (profile.Result(epsilon_bigger(demand_entry.first, l->q), C::DemandBreak, C::Count)) break;
++#else
+ 		if (epsilon_bigger(demand_entry.first, l->q)) break;
++#endif
+ 		for (auto& m: demand_entry.second)
+ 		{
++#ifdef KAYROS_DOMINANCE_PROFILING
++			profile.Add(C::Labels);
++#endif
+ 			// We know that q(m) <= q(l), v(m) = v(l).
++#ifdef KAYROS_DOMINANCE_PROFILING
++			if (profile.Result(sort_by_cost && epsilon_bigger(alpha(m, partial), l_beta), C::CostBreak, C::Count)) break;
++#else
+ 			if (sort_by_cost && epsilon_bigger(alpha(m, partial), l_beta)) break;
++#endif
++#ifdef KAYROS_DOMINANCE_PROFILING
++			if (!elementary_check_relaxation) {
++				profile.Add(C::SubsetTests);
++				if (profile.Result(!is_subset(m->U, l->U), C::SubsetReject, C::SubsetPass)) continue;
++			}
++#else
+ 			if (!elementary_check_relaxation && !is_subset(m->U, l->U)) continue;
++#endif
+ 			
+ 			if (!cost_check_relaxation)
+ 			{
+ 				// theta = p(l) + cut_cost(l) - p(m) - cut_cost(m) - \sum {sigma(i) : cut_visited[i](m) == 1 && cut_visited[i](l) != 1 }.
+ 				double theta = l->p + l->cut_cost - m->p - m->cut_cost;
++#ifdef KAYROS_DOMINANCE_PROFILING
++				for (int i: m->cut_nz) {
++					profile.Add(C::ThetaTerms);
++					if (l->cut_visited[i] != 1) { profile.Add(C::ThetaSubtractions); theta -= pp_.sigma[i]; }
++				}
++#else
+ 				for (int i: m->cut_nz) if (l->cut_visited[i] != 1) theta -= pp_.sigma[i];
++#endif
++#ifdef KAYROS_DOMINANCE_PROFILING
++				if (!partial) profile.Add(C::FullCalls);
++				else profile.Add(C::PartialCalls);
++				if (!partial && !profile.Result(Delta.IsAlwaysDominated(m->duration, theta), C::FullTrue, C::FullFalse)) continue;
++				else if (partial && !profile.Result(Delta.DominatePieces(m->duration, theta), C::PartialTrue, C::PartialFalse)) continue;
++#else
+ 				if (!partial && !Delta.IsAlwaysDominated(m->duration, theta)) continue;
+ 				else if (partial && !Delta.DominatePieces(m->duration, theta)) continue;
++#endif
+ 			}
+ 			
+ 			trace_domination_detail = false;
+@@ -466,6 +528,9 @@ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ 					min(img(m->duration)), max(img(m->duration)),
+ 					lu.c_str(), mu.c_str(), l->rw.left, l->rw.right, m->rw.left, m->rw.right);
+ 			}
++#ifdef KAYROS_DOMINANCE_PROFILING
++			profile.Finish(true);
++#endif
+ 			return true;
+ 		}
+ 	}
+@@ -476,43 +541,122 @@ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ 			trace::path_str(l).c_str(), min(dom((PWLFunction) Delta)), max(dom((PWLFunction) Delta)),
+ 			min(img((PWLFunction) Delta)), max(img((PWLFunction) Delta)),
+ 			min(img((PWLFunction) Delta)) - l->p - l->cut_cost);
++#ifdef KAYROS_DOMINANCE_PROFILING
++	profile.Switch(DP::Stage::Materialization);
++	profile.Add(C::Materializations);
++	profile.Add(C::Normalizations);
++#endif
+ 	l->duration = normalize_pwl((PWLFunction) Delta); // kayros (M5.7)
+ 	l->rw = l->duration.Domain();
+ 	l->min_cost = min(img(l->duration)) - l->p - l->cut_cost;
++#ifdef KAYROS_DOMINANCE_PROFILING
++	profile.Finish(false);
++#endif
+ 	return false;
+ }
+ 
+ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ {
++#ifdef KAYROS_DOMINANCE_PROFILING
++	using DP = DominanceProfile;
++	using C = DP::Counter;
++	DP::Episode profile(dominance_profile_, DP::Kind::Correction);
++	profile.Add(C::CandidatePieces, m->duration.PieceCount());
++	profile.Add(C::CandidateDemandFloorSum, static_cast<uint64_t>(floor(m->q)));
++	profile.Add(C::CandidateBuckets, U[m->v].end() - U[m->v].begin());
++#endif
++
++#ifdef KAYROS_DOMINANCE_PROFILING
++	if (cost_check_relaxation) { profile.Finish(false); return 0; }
++#else
+ 	if (cost_check_relaxation) return 0;
++#endif
+ 	int removed = 0;
+ 	for (auto it_d = U[m->v].rbegin(); it_d != U[m->v].rend(); ++it_d)
+ 	{
+ 		auto& demand_entry = *it_d;
++#ifdef KAYROS_DOMINANCE_PROFILING
++		profile.Add(C::Buckets);
++#endif
++#ifdef KAYROS_DOMINANCE_PROFILING
++		if (profile.Result(epsilon_smaller(demand_entry.first, m->q), C::DemandBreak, C::Count)) break;
++#else
+ 		if (epsilon_smaller(demand_entry.first, m->q)) break;
++#endif
+ 		bool changed_cost = false;
+ 		for (int j = 0; j < demand_entry.second.size(); ++j)
+ 		{
+ 			Label* l = demand_entry.second[j];
++#ifdef KAYROS_DOMINANCE_PROFILING
++			profile.Add(C::Labels);
++#endif
++
++#ifdef KAYROS_DOMINANCE_PROFILING
++			if (!elementary_check_relaxation) {
++				profile.Add(C::SubsetTests);
++				if (profile.Result(!is_subset(m->U, l->U), C::SubsetReject, C::SubsetPass)) continue;
++			}
++#else
+ 			if (!elementary_check_relaxation && !is_subset(m->U, l->U)) continue;
++#endif
+ 			if (!cost_check_relaxation)
+ 			{
+ 				// theta = p(l) + cut_cost(l) - p(m) - cut_cost(m) - \sum {sigma(i) : cut_visited[i](m) == 1 && cut_visited[i](l) != 1 }.
+ 				double theta = l->p + l->cut_cost - m->p - m->cut_cost;
++#ifdef KAYROS_DOMINANCE_PROFILING
++				for (int i: m->cut_nz) {
++					profile.Add(C::ThetaTerms);
++					if (l->cut_visited[i] != 1) { profile.Add(C::ThetaSubtractions); theta -= pp_.sigma[i]; }
++				}
++#else
+ 				for (int i: m->cut_nz) if (l->cut_visited[i] != 1) theta -= pp_.sigma[i];
++#endif
++#ifdef KAYROS_DOMINANCE_PROFILING
++				profile.Switch(DP::Stage::Construction);
++				profile.Add(C::ScratchFunctions);
++				profile.Add(C::ScratchPieces, l->duration.PieceCount());
++#endif
+ 				PWLDominationFunction Delta(l->duration);
++#ifdef KAYROS_DOMINANCE_PROFILING
++				Delta.SetProfile(profile.Accumulator());
++				profile.Switch(DP::Stage::Scan);
++#endif
++
+ 				if (partial)
+ 				{
+ 					const double previous_cost = l->min_cost;
++#ifdef KAYROS_DOMINANCE_PROFILING
++					profile.Add(C::PartialCalls);
++					profile.Result(Delta.DominatePieces(m->duration, theta), C::PartialTrue, C::PartialFalse);
++#else
+ 					Delta.DominatePieces(m->duration, theta);
++#endif
++#ifdef KAYROS_DOMINANCE_PROFILING
++					profile.Switch(DP::Stage::Materialization);
++					profile.Add(C::Materializations);
++					profile.Add(C::Normalizations);
++#endif
+ 					l->duration = normalize_pwl((PWLFunction) Delta); // kayros (M5.7)
+ 					l->rw = l->duration.Domain();
+ 					l->min_cost = min(img(l->duration)) - l->p - l->cut_cost;
+ 					changed_cost |= l->min_cost != previous_cost;
++#ifdef KAYROS_DOMINANCE_PROFILING
++					if (l->min_cost != previous_cost) profile.Add(C::CostChanges);
++					profile.Switch(DP::Stage::Scan);
++#endif
++
+ 				}
++#ifdef KAYROS_DOMINANCE_PROFILING
++				if (!partial) profile.Add(C::FullCalls);
++				if ((!partial && profile.Result(Delta.IsAlwaysDominated(m->duration, theta), C::FullTrue, C::FullFalse)) || (partial && l->duration.Empty()))
++#else
+ 				if ((!partial && Delta.IsAlwaysDominated(m->duration, theta)) || (partial && l->duration.Empty()))
++#endif
+ 				{
+ 					// If l is fully dominated, remove.
++#ifdef KAYROS_DOMINANCE_PROFILING
++					profile.Add(C::Retirements);
++#endif
+ 					retired_labels_.push_back(l);
+ 					demand_entry.second.erase(demand_entry.second.begin()+j);
+ 					--j;
+@@ -523,12 +667,18 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 		if (changed_cost)
+ 		{
+ 			// Subsequent labels consult U before this batch returns.
++#ifdef KAYROS_DOMINANCE_PROFILING
++			if (sort_by_cost) profile.Add(C::Sorts);
++#endif
+ 			if (sort_by_cost)
+ 				std::stable_sort(demand_entry.second.begin(), demand_entry.second.end(),
+ 					[&](Label* a, Label* b) { return alpha(a, partial) < alpha(b, partial); });
+ 			corrected_merge_buckets_.emplace_back(m->v, demand_entry.first);
+ 		}
+ 	}
++#ifdef KAYROS_DOMINANCE_PROFILING
++	profile.Finish(removed != 0);
++#endif
+ 	return removed;
+ }
+ 
+diff --git a/cpp/lera/main/src/labeling/pwl_domination_function.cpp b/cpp/lera/main/src/labeling/pwl_domination_function.cpp
+index b8c1d20c9fba3baf937bd06eb72a0cba504fb6f7..3f2e372e3e41ca8b19a20020a0b7f36c2bfdac10 100644
+--- a/cpp/lera/main/src/labeling/pwl_domination_function.cpp
++++ b/cpp/lera/main/src/labeling/pwl_domination_function.cpp
+@@ -11,6 +11,25 @@ using namespace goc;
+ 
+ namespace solver
+ {
++#ifdef KAYROS_DOMINANCE_PROFILING
++namespace {
++using PC = DominanceProfile::Counter;
++inline void profile_add(DominanceProfile::Counters* profile, PC counter) {
++	if (profile) profile->Add(counter);
++}
++inline void profile_compare(DominanceProfile::Counters* profile,
++	const LinearFunction& p1, const LinearFunction& p2, bool full) {
++	if (!profile) return;
++	profile->Add(full ? PC::FullComparisons : PC::PartialComparisons);
++	if ((p1.is_vertical() && !p1.is_choice_vertical()) || (p2.is_vertical() && !p2.is_choice_vertical()))
++		profile->Add(full ? PC::FullJump : PC::PartialJump);
++	else if (p1.is_choice_vertical() || p2.is_choice_vertical())
++		profile->Add(full ? PC::FullChoice : PC::PartialChoice);
++	else profile->Add(full ? PC::FullScalar : PC::PartialScalar);
++}
++}
++#endif
++
+ // M5.9 dev tracing: set by DominationStep when the candidate matches
+ // KAYROS_TRACE_PATH; DominatePieces then prints its piece comparisons.
+ bool trace_domination_detail = false;
+@@ -47,13 +66,24 @@ inline double dominator_value(const LinearFunction& p, double x)
+ // piece's top is not necessarily the maximum: take the max image top over
+ // every piece touching the final abscissa. A too-low base under-estimates the
+ // completion and over-dominates candidates beyond the dominator's domain.
+-static double completion_base(const PWLFunction& f2)
++static double completion_base(const PWLFunction& f2
++#ifdef KAYROS_DOMINANCE_PROFILING
++	, DominanceProfile::Counters* profile
++#endif
++)
+ {
++#ifdef KAYROS_DOMINANCE_PROFILING
++	profile_add(profile, PC::CompletionCalls);
++#endif
+ 	double x_end = f2.Domain().right;
+ 	double base = -INFTY;
+ 	for (int i = f2.PieceCount() - 1; i >= 0; --i)
+ 	{
+ 		const LinearFunction& p = f2.Piece(i);
++#ifdef KAYROS_DOMINANCE_PROFILING
++		profile_add(profile, PC::CompletionPieces);
++#endif
++
+ 		if (epsilon_smaller(p.domain.right, x_end)) break;
+ 		base = std::max(base, p.is_vertical() ? max(p.image) : p.Value(p.domain.right));
+ 	}
+@@ -90,17 +120,33 @@ bool PWLDominationFunction::Empty() const
+ 
+ bool PWLDominationFunction::DominatePieces(const PWLFunction& f2, double delta)
+ {
++#ifdef KAYROS_DOMINANCE_PROFILING
++	if (Empty()) { profile_add(profile_, PC::PartialEmpty); return true; }
++#else
+ 	if (Empty()) return true;
++#endif
+ 	auto& f1 = *this;
++#ifdef KAYROS_DOMINANCE_PROFILING
++	if (epsilon_smaller(f1.Domain().right, f2.Domain().left)) { profile_add(profile_, PC::PartialBeforeDomain); return false; }
++#else
+ 	if (epsilon_smaller(f1.Domain().right, f2.Domain().left)) return false;
++#endif
+ 	
+ 	// Check domination if functions are points.
++#ifdef KAYROS_DOMINANCE_PROFILING
++	if (f2.Domain().IsPoint() && !f1.Domain().IsPoint()) { profile_add(profile_, PC::PartialPointDomain); return false; }
++#else
+ 	if (f2.Domain().IsPoint() && !f1.Domain().IsPoint()) return false;
++#endif
+ 
+ 	// Piece to add to the final of f2 with waiting time to include all f1's domain.
+ 	// M5.9 (20/n): base = max over ALL pieces at the final abscissa (stacked
+ 	// choice pieces can hide the maximum in a non-last piece).
+-	double f2_last_duration = completion_base(f2);
++	double f2_last_duration = completion_base(f2
++#ifdef KAYROS_DOMINANCE_PROFILING
++		, profile_
++#endif
++	);
+ 	auto completion_piece = LinearFunction(
+ 		{max(dom(f2)), f2_last_duration},
+ 		{f1.Domain().right, f2_last_duration + (f1.Domain().right - max(dom(f2)))}
+@@ -110,27 +156,49 @@ bool PWLDominationFunction::DominatePieces(const PWLFunction& f2, double delta)
+ 	int prev_i1 = -1; // index of the previous element of i1.
+ 	while (i1 != -1 && i2 <= f2.PieceCount())
+ 	{
++#ifdef KAYROS_DOMINANCE_PROFILING
++		profile_add(profile_, PC::PartialPairIterations);
++#endif
+ 		auto& p1 = f1.pieces_[i1];
+ 		auto& p2 = i2 == f2.PieceCount() ? completion_piece : f2.Piece(i2);
+ 		
+ 		// If p2 = [ .... ] --nointersection- [ ....] = p1, move p2 forward.
++#ifdef KAYROS_DOMINANCE_PROFILING
++		if (epsilon_smaller(max(dom(p2)), min(dom(p1)))) { profile_add(profile_, PC::PartialSkipDominatorBefore); ++i2; continue; }
++#else
+ 		if (epsilon_smaller(max(dom(p2)), min(dom(p1)))) { ++i2; continue; }
++#endif
+ 		
+ 		// If p1 = [ .... ] --nointersection- [ .... ] = p2, move p1 forward.
++#ifdef KAYROS_DOMINANCE_PROFILING
++		if (epsilon_smaller(p1.domain.right, p2.domain.left)) { profile_add(profile_, PC::PartialSkipCandidateBefore); prev_i1 = i1; i1 = next_[i1]; continue; }
++#else
+ 		if (epsilon_smaller(p1.domain.right, p2.domain.left)) { prev_i1 = i1; i1 = next_[i1]; continue; }
++#endif
+ 		
+ 		// If p2 intersects p1 exactly at the end, and p1 is not a point then it makes
+ 		// no sense in attempting domination.
++#ifdef KAYROS_DOMINANCE_PROFILING
++		if (epsilon_equal(p1.domain.right, p2.domain.left) && !p1.domain.IsPoint()) { profile_add(profile_, PC::PartialSkipCandidateEnd); prev_i1 = i1; i1 = next_[i1]; continue; }
++#else
+ 		if (epsilon_equal(p1.domain.right, p2.domain.left) && !p1.domain.IsPoint()) { prev_i1 = i1; i1 = next_[i1]; continue; }
++#endif
+ 		
+ 		// If p2 intersects p1 exactly at the begining, and p1 is not a point then it makes
+ 		// no sense in attempting domination.
++#ifdef KAYROS_DOMINANCE_PROFILING
++		if (epsilon_equal(p2.domain.left, p1.domain.right) && !p1.domain.IsPoint()) { profile_add(profile_, PC::PartialSkipDominatorEnd); ++i2; continue; }
++#else
+ 		if (epsilon_equal(p2.domain.left, p1.domain.right) && !p1.domain.IsPoint()) { ++i2; continue; }
++#endif
+ 		
+ 		// Now we have intersection between p1 and p2, we call it [l, r].
+ 		double l = max(p1.domain.left, p2.domain.left);
+ 		double r = min(p1.domain.right, p2.domain.right);
+ 		
++#ifdef KAYROS_DOMINANCE_PROFILING
++		profile_compare(profile_, p1, p2, false);
++#endif
+ 		double f1l = candidate_value(p1, l), f1r = candidate_value(p1, r);
+ 		double f2l = dominator_value(p2, l), f2r = dominator_value(p2, r);
+ 
+@@ -171,6 +239,9 @@ bool PWLDominationFunction::DominatePieces(const PWLFunction& f2, double delta)
+ 			// Case A: [ld, rd] is a superset of dom(p1), then remove p1.
+ 			if (epsilon_smaller_equal(ld, p1.domain.left) && epsilon_bigger_equal(rd, p1.domain.right))
+ 			{
++#ifdef KAYROS_DOMINANCE_PROFILING
++				profile_add(profile_, PC::PartialErase);
++#endif
+ 				i1 = ErasePiece(i1, prev_i1);
+ 				// We moved i1 to the next piece, we can move to the next iteration.
+ 				continue;
+@@ -178,11 +249,17 @@ bool PWLDominationFunction::DominatePieces(const PWLFunction& f2, double delta)
+ 				// Case B: [ld, rd] is a prefix of dom(p1), then update the left domain and image of p1.
+ 			else if (epsilon_smaller_equal(ld, p1.domain.left))
+ 			{
++#ifdef KAYROS_DOMINANCE_PROFILING
++				profile_add(profile_, PC::PartialShrinkLeft);
++#endif
+ 				p1 = LinearFunction({rd, p1.Value(rd)}, {p1.domain.right, p1.Value(p1.domain.right)});
+ 			}
+ 				// Case C: [ld, rd] is a suffix of dom(p1), then update the right domain and image of p1.
+ 			else if (epsilon_bigger_equal(rd, p1.domain.right))
+ 			{
++#ifdef KAYROS_DOMINANCE_PROFILING
++				profile_add(profile_, PC::PartialShrinkRight);
++#endif
+ 				p1 = LinearFunction({p1.domain.left, p1.Value(p1.domain.left)}, {ld, p1.Value(ld)});
+ 			}
+ 				// Case D: [ld, rd] is in the middle of dom(p1), then we need to split p1 into the leftmost and rightmost pieces.
+@@ -191,6 +268,9 @@ bool PWLDominationFunction::DominatePieces(const PWLFunction& f2, double delta)
+ 			{
+ 				// We first create the rightmost piece [rd, max(dom(p1))].
+ 				// Move i1 to this piece.
++#ifdef KAYROS_DOMINANCE_PROFILING
++				profile_add(profile_, PC::PartialSplit);
++#endif
+ 				prev_i1 = i1;
+ 				auto right_piece = LinearFunction({rd, p1.Value(rd)}, {p1.domain.right, p1.image.right});
+ 				i1 = AddPieceAfter(i1, right_piece);
+@@ -209,15 +289,27 @@ bool PWLDominationFunction::DominatePieces(const PWLFunction& f2, double delta)
+ 
+ bool PWLDominationFunction::IsAlwaysDominated(const PWLFunction& f2, double delta)
+ {
++#ifdef KAYROS_DOMINANCE_PROFILING
++	if (Empty()) { profile_add(profile_, PC::FullEmpty); return true; }
++#else
+ 	if (Empty()) return true;
++#endif
+ 	PWLDominationFunction& f1 = *this;
+ 	
+ 	// If earliest arrival of f2 is later than f1's then all domain can not be dominated.
++#ifdef KAYROS_DOMINANCE_PROFILING
++	if (epsilon_bigger(min(dom(f2)), f1.Domain().left)) { profile_add(profile_, PC::FullBeforeDomain); return false; }
++#else
+ 	if (epsilon_bigger(min(dom(f2)), f1.Domain().left)) return false;
++#endif
+ 	
+ 	// Piece to add to the final of f2 with waiting time to include all f1's domain.
+ 	// M5.9 (20/n): see DominatePieces — max over all pieces at the final abscissa.
+-	double f2_last_duration = completion_base(f2);
++	double f2_last_duration = completion_base(f2
++#ifdef KAYROS_DOMINANCE_PROFILING
++		, profile_
++#endif
++	);
+ 	auto completion_piece = LinearFunction(
+ 		{max(dom(f2)), f2_last_duration},
+ 		{f1.Domain().right, f2_last_duration + (f1.Domain().right - max(dom(f2)))}
+@@ -226,26 +318,48 @@ bool PWLDominationFunction::IsAlwaysDominated(const PWLFunction& f2, double delt
+ 	int i1 = first_, i2 = 0;
+ 	while (i1 != -1 && i2 <= f2.Pieces().size())
+ 	{
++#ifdef KAYROS_DOMINANCE_PROFILING
++		profile_add(profile_, PC::FullPairIterations);
++#endif
+ 		auto& p1 = f1.pieces_[i1];
+ 		
+ 		// Search first piece in f2 that ends after the begining of p1.
++#ifdef KAYROS_DOMINANCE_PROFILING
++		for (; i2 < f2.Pieces().size(); ++i2) {
++			profile_add(profile_, PC::FullSearchPieces);
++			if (epsilon_bigger_equal(f2.Piece(i2).domain.right, p1.domain.right))
++				break;
++		}
++#else
+ 		for (; i2 < f2.Pieces().size(); ++i2)
+ 			if (epsilon_bigger_equal(f2.Piece(i2).domain.right, p1.domain.right))
+ 				break;
++#endif
+ 		auto& p2 = i2 == f2.PieceCount() ? completion_piece : f2.Piece(i2);
+ 		
+ 		// If p1 = [ .... ] --space-- [ .... ] = p2, then p1 is not dominated.
++#ifdef KAYROS_DOMINANCE_PROFILING
++		if (epsilon_smaller(p1.domain.right, p2.domain.left)) { profile_add(profile_, PC::FullGap); return false; }
++#else
+ 		if (epsilon_smaller(p1.domain.right, p2.domain.left)) return false;
++#endif
+ 		
+ 		// Now we have intersection between p1 and p2, we call it [l, r].
+ 		double l = max(p1.domain.left, p2.domain.left);
+ 		double r = min(p1.domain.right, p2.domain.right);
+ 		
++#ifdef KAYROS_DOMINANCE_PROFILING
++		profile_compare(profile_, p1, p2, true);
++#endif
+ 		double f1l = candidate_value(p1, l), f1r = candidate_value(p1, r);
+ 		double f2l = dominator_value(p2, l), f2r = dominator_value(p2, r);
+ 		
+ 		// If f1(l) < f2(l)+delta or f1(r) < f2(r)+delta, then there is some part of f1 which is not dominated.
++#ifdef KAYROS_DOMINANCE_PROFILING
++		if (epsilon_smaller(f1l, f2l+delta) || epsilon_smaller(f1r, f2r+delta)) { profile_add(profile_, PC::FullValueReject); return false; }
++#else
+ 		if (epsilon_smaller(f1l, f2l+delta) || epsilon_smaller(f1r, f2r+delta)) return false;
++#endif
+ 		
+ 		// Move the piece which ends before.
+ 		if (p1.domain.right < p2.domain.right) i1 = next_[i1];
+diff --git a/docs/ms58-dominance-profile.md b/docs/ms58-dominance-profile.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..bbc956eb7903389626ef58ae0bae935b0cf1784b
+--- /dev/null
++++ b/docs/ms58-dominance-profile.md
+@@ -0,0 +1,59 @@
++# Experimental dominance and correction profiling
++
++This diagnostic derivative starts from selected correction-on Kayros `9d64b7c53ddaea7a578d247ebd28db43ae0d4e56`. We measure the selected source independently from the older correction-off extension profile. We introduce no dominance optimization, caching, filter approximation, PWL arithmetic change, or solver experiment.
++
++The CMake option `KAYROS_DOMINANCE_PROFILING` defaults to `OFF`. All instrumentation is preprocessor guarded. OFF preprocessing has identical C++ tokens to selected9d for the 3 modified translation units and the 3 modified class headers. The CMake definition is public on `lera`, so the `_lera` bridge and its library share class layouts. The independent `_core` and its ILS code receive no profiling definition. Production and performance builds must keep this option disabled.
++
++## Activation and records
++
++Build a separate CPLEX diagnostic variant with `-DKAYROS_DOMINANCE_PROFILING=ON`. Set `KAYROS_DOMINANCE_PROFILE` to a new JSONL path before creating the solver. The owner exclusively creates this file with `fopen(..., "wx")`. An existing file causes an error without being overwritten. Missing or empty runtime opt-in leaves profiling inactive. A compiled diagnostic variant still has instrumentation overhead when runtime profiling is inactive and is unsuitable as a performance control.
++
++The optional variables `KAYROS_DOMINANCE_PROFILE_STRIDE` and `KAYROS_DOMINANCE_PROFILE_OFFSET` default to `1009` and `0`. Invalid integers, a zero stride, or an offset at least equal to the stride fail before opening the file. We sample zero-based whole calls whose ordinal modulo stride equals offset, separately for dominance, correction and merge maintenance, separately for each direction, resetting at every pricing call.
++
++A flushed `profile_open` identifies schema `kayros-ms58-dominance-profile-v1`, exact selected base, sampling rule and clock. Each pricing call writes a flushed `pricing_begin` with the pricing problem, level and effective flags, including correcting, partial dominance, cost and elementarity relaxation, each direction's NG setting, sorting, extension mode, arithmetic mode and limits. Cumulative `pricing_progress` is checked after sampled calls and monodirectional batches, with a minimum interval of 5 seconds. A long call or merge can delay a progress record.
++
++Normal pricing return writes `pricing_end`, `pricing_returned=true`, the unchanged native log, explicit `native_status`, returned-route count and pool size. Native statuses retain their distinction between Finished, TimeLimitReached, MemoryLimitReached and SolutionLimitReached. A return record does not assert solver closure or proof validity. An unmatched begin remains unfinished after exceptions or termination. Destructors do not finish pricing or interrupted episodes. Counters from finished episodes are committed at explicit normal returns. Attempts and sampled attempts can therefore exceed finished counts in an interrupted call.
++
++All state belongs to one `BidirectionalLabeling` instance. Its monodirectional helpers receive stable direction pointers. A PWL scratch helper receives an optional accumulator scoped to its enclosing dominance or correction call. No mutable global or thread-local profiling state is added.
++
++## Attribution and counters
++
++Each operation groups counters and sampled times by its final outcome. For dominance, `eliminated` means the candidate was fully eliminated. For correction, it means the call retired at least 1 stored label. For merge maintenance, it means at least 1 empty label was removed from the merge index. The `survived` correction group includes calls that changed domains or costs while retiring no label, as well as the existing cost-relaxation shortcut. No-return episodes are excluded from either outcome group.
++
++Each sample measures whole-call steady-clock wall time and partitions it exactly into construction, scan and materialization nanoseconds. Construction covers PWL scratch creation. Materialization covers rebuilding and normalizing surviving durations and their scalar resources. Scan contains the remaining call work, including depot checks, filters, PWL domination, theta calculation, retirement, sorting, trace work and correction bookkeeping. Stage entry and finish bookkeeping are included between their timer boundaries. Episode initialization, final counter aggregation and JSON writes are outside the measured interval. Merge maintenance uses the scan partition. Unsampled calls collect counters without reading the clock inside their episode.
++
++Loop counters cover candidate duration pieces, the sum of floored candidate demands, candidate demand-bucket counts, depot shortcuts, bucket and label visits, demand and cost breaks, actual U-subset tests and pass/reject outcomes, theta terms and subtractions, scratch functions and pieces, partial/full PWL calls and boolean outcomes, materializations, normalizations, changed costs, retirements and correction sorts. The demand statistic uses the same floor convention as bucket insertion. It is a sum, not a demand distribution. Relaxed subset checks contribute no actual subset test. A cost break counts the label whose key triggered the break.
++
++PWL counters cover completion-base calls and inspected pieces, partial early exits, pair iterations, the 4 original skip branches, actual comparisons, erase, left/right shrink and split operations. Full-only domination has separate empty/domain/gap/value exits, pair iterations, search-piece inspections and comparisons. Comparison categories are mutually exclusive. A pair containing a JUMP counts as JUMP, otherwise a pair containing CHOICE counts as CHOICE, otherwise it counts as scalar. Completion-piece inspection includes the piece that triggers the existing stopping condition. Completion counters are shared by partial/full calls within their enclosing operation, while call, pair and comparison counters remain separate.
++
++A `false` return from `DominatePieces` means some candidate survives. It can still shrink or split the scratch function. We record these mutations independently and attribute them to the final enclosing-call outcome. Mutation counts count branch executions, so a single call can shrink a prefix multiple times, including against the completion piece. No boolean result is interpreted as absence of pruning.
++
++Merge refresh counters cover input dirty buckets, deduplicated dirty buckets, visited merge entries, labels inspected, empty labels removed and stable sorts. Counts are recorded without changing retirement ownership, correction order or merge-index repair.
++
++## Local validation
++
++The standalone accounting fixture passes counter aggregation, outcome attribution, direction and operation separation, sample phase, pricing reset, exact timing partition, native status retention, unfinished handling, exclusive output and invalid-setting checks. The native PWL fixture passes 5,040 predicate and bitwise piece comparisons across both arithmetic modes, empty and point candidates, ordinary segments, CHOICE and JUMP pieces, and several domination deltas. Its OFF and ON executions produce digest `dcbfcebb1acf42ef`. Explicit mutation fixtures cover a surviving prefix shrink, a surviving interior split and full erasure.
++
++The native labeling fixture executes the selected source's existing correction invariants unchanged in both arithmetic modes and sorting settings. It additionally checks actual dominance/correction counters for U filtering, partial mutation without retirement, surviving partially pruned candidates, full-only retirement, relaxed cost skipping, merge-index repair and reset. These are synthetic native fixtures. They do not launch a routing benchmark or solve a master LP.
++
++The diagnostic `lera` static library and `_lera` bridge compile locally in the project's Nix shell with CPLEX selected. The compile commands confirm that the bridge inherits the definition and `_core` does not. The OFF equivalence fixture lexes preprocessed output, preserving whitespace inside quoted literals, and compares against a temporary archive of exact selected9d.
++
++```bash
++nix develop ./nix-dev
++cmake -S . -B build/dominance-profile-cplex -DCMAKE_BUILD_TYPE=Release -DLERA_LP_BACKEND=cplex -DKAYROS_DOMINANCE_PROFILING=ON -Dpybind11_DIR="$(python -m pybind11 --cmakedir)"
++cmake --build build/dominance-profile-cplex --target _lera -j 3
++python tests/cpp/check_dominance_profile_off.py
++
++g++ -std=c++23 -O2 -DNDEBUG -ffp-contract=off -DKAYROS_DOMINANCE_PROFILING=1 -Icpp/lera/main/include -Icpp/lera/goc/include tests/cpp/test_dominance_profile.cpp -o build/test_dominance_profile
++build/test_dominance_profile
++
++# Compile each native fixture with the same public diagnostic definition.
++for fixture in test_dominance_profile_pwl test_dominance_profile_labeling; do
++    g++ -std=c++23 -O2 -DNDEBUG -ffp-contract=off -DKAYROS_DOMINANCE_PROFILING=1 -Icpp/lera/main/include -Icpp/lera/goc/include -Icpp/lera/nyr/include -Icpp/lera/magic_enum/include -isystem "$BOOST_INCLUDE" tests/cpp/$fixture.cpp build/dominance-profile-cplex/cpp/lera/liblera.a -L"$BOOST_BIN" -lboost_graph -ldl -lm -o build/$fixture
++    build/$fixture
++done
++```
++
++No solver trajectory, runtime advantage, or search-work equivalence has been established. Instrumentation can perturb timing and stopping points. Deterministic samples can correlate with search order, so any attribution should report sample counts and use offset repeats when needed. The original correction-off C104 measurement does not transfer to this correction-on derivative without a fresh measurement.
++
++All future routing pilots must use Dabia2013 with 25, 50 or 100 customers, CPLEX and fixed minimalLera `f2c9e20` as a control. The direct diagnostic control is uninstrumented selected9d. Retain complete source, patch, binary, input and harness hashes. Keep interrupted tasks unfinished and compare returned pools and native work signatures before interpreting timing. The active five-arm wave and selected worktree remain outside this diagnostic's scope.
+diff --git a/tests/cpp/check_dominance_profile_off.py b/tests/cpp/check_dominance_profile_off.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ff6a15152f49d9d6403f5bccb8808e0b0de74ead
+--- /dev/null
++++ b/tests/cpp/check_dominance_profile_off.py
+@@ -0,0 +1,62 @@
++"""Check OFF preprocessing against exact selected9d without changing its tree."""
++from __future__ import annotations
++
++import hashlib
++import io
++import json
++import os
++from pathlib import Path
++import re
++import subprocess
++import tarfile
++import tempfile
++
++BASE = "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56"
++ROOT = Path(__file__).resolve().parents[2]
++SOURCES = [
++    "cpp/lera/main/src/labeling/monodirectional_labeling.cpp",
++    "cpp/lera/main/src/labeling/bidirectional_labeling.cpp",
++    "cpp/lera/main/src/labeling/pwl_domination_function.cpp",
++    "cpp/lera/main/include/labeling/bidirectional_labeling.h",
++    "cpp/lera/main/include/labeling/monodirectional_labeling.h",
++    "cpp/lera/main/include/labeling/pwl_domination_function.h",
++]
++# Keep quoted literals intact, including their internal whitespace. The input
++# has already been preprocessed, so comments and directives are absent.
++TOKEN = re.compile(
++    r'(?:u8|u|U|L)?R"(?P<delimiter>[^ ()\\\t\r\n]{0,16})\(.*?\)(?P=delimiter)"'
++    r'|(?:u8|u|U|L)?"(?:\\.|[^"\\])*"'
++    r"|(?:u8|u|U|L)?'(?:\\.|[^'\\])*'"
++    r'|[A-Za-z_$][A-Za-z_0-9$]*'
++    r'|(?:\d|\.\d)(?:[eEpP][+-]|[A-Za-z_0-9.])*'
++    r'|%:%:|<=>|>>=|<<=|->\*|\.\.\.|##|::|\.\*|->|\+\+|--|<<|>>|<=|>=|==|!='
++    r'|&&|\|\||\*=|/=|%=|\+=|-=|&=|\^=|\|=|<:|:>|<%|%>|%:|[^\s]',
++    re.DOTALL,
++)
++
++
++def tokens(tree: Path, source: str) -> bytes:
++    command = ["g++", "-std=c++23", "-E", "-P", "-w", "-x", "c++",
++               "-Icpp/lera/main/include", "-Icpp/lera/goc/include",
++               "-Icpp/lera/nyr/include", "-Icpp/lera/magic_enum/include"]
++    if os.environ.get("BOOST_INCLUDE"):
++        command += ["-isystem", os.environ["BOOST_INCLUDE"]]
++    command.append(source)
++    result = subprocess.run(command, cwd=tree, check=True, capture_output=True, text=True)
++    return "\0".join(match.group() for match in TOKEN.finditer(result.stdout)).encode()
++
++
++with tempfile.TemporaryDirectory(prefix="kayros-dominance-off-") as temporary:
++    base_tree = Path(temporary)
++    archive = subprocess.run(["git", "archive", BASE], cwd=ROOT, check=True, capture_output=True).stdout
++    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
++        tar.extractall(base_tree, filter="data")
++    results = []
++    for source in SOURCES:
++        original, derivative = tokens(base_tree, source), tokens(ROOT, source)
++        if original != derivative:
++            raise AssertionError(f"OFF preprocessing differs for {source}")
++        results.append({"source": source, "token_sha256": hashlib.sha256(original).hexdigest(),
++                        "token_bytes": len(original), "equivalent": True})
++    print(json.dumps({"base": BASE, "definition": "KAYROS_DOMINANCE_PROFILING absent",
++                      "checks": results}, indent=2))
+diff --git a/tests/cpp/test_dominance_profile.cpp b/tests/cpp/test_dominance_profile.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..a3ee0467173fbd0ce6865c23a3ff099a1bfce518
+--- /dev/null
++++ b/tests/cpp/test_dominance_profile.cpp
+@@ -0,0 +1,137 @@
++#include "labeling/dominance_profile.h"
++
++#include <filesystem>
++#include <fstream>
++#include <iostream>
++#include <vector>
++
++using Profile = solver::DominanceProfile;
++using Json = nlohmann::json;
++using C = Profile::Counter;
++
++namespace {
++void require(bool condition, const char* message) {
++    if (!condition) throw std::runtime_error(message);
++}
++std::vector<Json> read(const std::filesystem::path& path) {
++    std::ifstream input(path);
++    std::vector<Json> records;
++    std::string line;
++    while (std::getline(input, line)) records.push_back(Json::parse(line));
++    return records;
++}
++}
++
++int main() {
++    char pattern[] = "/tmp/kayros-dominance-profile-XXXXXX";
++    const char* directory = mkdtemp(pattern);
++    if (!directory) return 2;
++    const std::filesystem::path root(directory);
++    try {
++        unsetenv("KAYROS_DOMINANCE_PROFILE");
++        Profile disabled;
++        require(!disabled.Enabled() && !disabled.GetDirection(0), "Missing runtime opt-in was ignored");
++        disabled.Begin({});
++        Profile::Episode inactive(nullptr, Profile::Kind::Dominance);
++        require(!inactive.Sampled() && !inactive.Accumulator(), "Inactive call became active");
++        inactive.Add(C::Labels);
++        inactive.Finish(true);
++
++        const auto path = root / "profile.jsonl";
++        setenv("KAYROS_DOMINANCE_PROFILE", path.c_str(), 1);
++        setenv("KAYROS_DOMINANCE_PROFILE_STRIDE", "3", 1);
++        setenv("KAYROS_DOMINANCE_PROFILE_OFFSET", "1", 1);
++        {
++            Profile profile;
++            auto* forward = profile.GetDirection(0);
++            profile.Begin({{"fixture", "sampling"}});
++            require(forward == profile.GetDirection(0), "Reset invalidated the direction pointer");
++            for (int d : {0, 1}) {
++                for (auto kind : {Profile::Kind::Dominance, Profile::Kind::Correction, Profile::Kind::MergeMaintenance}) {
++                    for (int i = 0; i < (d ? 4 : 7); ++i) {
++                        Profile::Episode episode(profile.GetDirection(d), kind);
++                        require(episode.Sampled() == (i % 3 == 1), "Sampling phase leaked across kinds or directions");
++                        episode.Add(C::Labels, 2);
++                        episode.Switch(Profile::Stage::Construction);
++                        episode.Add(C::ScratchFunctions);
++                        episode.Switch(Profile::Stage::Scan);
++                        require(!episode.Result(false, C::PartialTrue, C::PartialFalse), "Result wrapper changed false");
++                        episode.Accumulator()->Add(C::PartialShrinkLeft);
++                        episode.Switch(Profile::Stage::Materialization);
++                        episode.Add(C::Normalizations);
++                        episode.Finish(i % 2 != 0);
++                        episode.Finish(true); // Idempotent, including a different outcome.
++                    }
++                }
++            }
++            profile.MaybeProgress();
++            profile.End({{"status", "TimeLimitReached"}}, 2, 3);
++            profile.Begin({{"fixture", "reset"}});
++            Profile::Episode reset(forward, Profile::Kind::Dominance);
++            require(!reset.Sampled(), "Pricing reset retained sample phase");
++            reset.Add(C::DepotShortcut);
++            reset.Finish(false);
++            profile.End({{"status", "MemoryLimitReached"}}, 0, 0);
++            profile.Begin({{"fixture", "unfinished"}});
++            Profile::Episode unfinished(forward, Profile::Kind::Dominance);
++            unfinished.Add(C::Labels, 99);
++            // Neither episode destruction nor profile destruction implies completion.
++        }
++        const auto records = read(path);
++        require(records.size() == 6, "Unexpected record count");
++        require(records[0]["base_source"] == "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56", "Base identity changed");
++        const auto& end = records[2];
++        require(end["native_status"] == "TimeLimitReached" && end["native_log"]["status"] == "TimeLimitReached",
++                "Native return status was changed");
++        for (const char* direction : {"forward", "backward"}) {
++            const bool fw = std::string(direction) == "forward";
++            for (const char* kind : {"dominance", "correction", "merge_maintenance"}) {
++                const auto& operation = end[direction][kind];
++                require(operation["attempts"] == (fw ? 7 : 4), "Attempt count changed");
++                require(operation["sampled_attempts"] == (fw ? 2 : 1), "Sample count changed");
++                for (const char* outcome : {"survived", "eliminated"}) {
++                    const auto& value = operation[outcome];
++                    const int finished = fw ? (std::string(outcome) == "survived" ? 4 : 3) : 2;
++                    require(value["finished"] == finished, "Outcome classification changed");
++                    require(value["counters"]["labels"] == 2 * finished, "Counters lost outcome attribution");
++                    require(value["counters"]["partial_false"] == finished &&
++                            value["counters"]["partial_shrink_left"] == finished,
++                            "False partial result was treated as unchanged");
++                    uint64_t sum = 0;
++                    for (const auto& stage : value["sampled_stage_ns"]) sum += stage.get<uint64_t>();
++                    require(sum == value["sampled_ns"].get<uint64_t>(), "Stages do not partition whole-call time");
++                }
++            }
++        }
++        const auto& reset = records[4]["forward"]["dominance"];
++        require(reset["attempts"] == 1 && reset["sampled_attempts"] == 0, "Pricing counters did not reset");
++        require(reset["survived"]["counters"]["labels"] == 0 && reset["survived"]["counters"]["depot_shortcut"] == 1,
++                "Counters leaked across pricing calls");
++        require(records[4]["native_status"] == "MemoryLimitReached", "Memory status changed");
++        require(records.back()["event"] == "pricing_begin" && records.back()["pricing_returned"] == false,
++                "Unfinished pricing was silently completed");
++        bool rejected = false;
++        try { Profile collision; } catch (const std::runtime_error&) { rejected = true; }
++        require(rejected && read(path).size() == records.size(), "Exclusive creation overwrote a file");
++        for (const char* stride : {"0", "-1", "3x", ""}) {
++            const auto invalid_path = root / "invalid.jsonl";
++            setenv("KAYROS_DOMINANCE_PROFILE", invalid_path.c_str(), 1);
++            setenv("KAYROS_DOMINANCE_PROFILE_STRIDE", stride, 1);
++            rejected = false;
++            try { Profile invalid; } catch (const std::runtime_error&) { rejected = true; }
++            require(rejected && !std::filesystem::exists(invalid_path), "Invalid settings created output");
++        }
++        setenv("KAYROS_DOMINANCE_PROFILE_STRIDE", "3", 1);
++        setenv("KAYROS_DOMINANCE_PROFILE_OFFSET", "3", 1);
++        rejected = false;
++        try { Profile invalid; } catch (const std::runtime_error&) { rejected = true; }
++        require(rejected, "Offset outside the stride was accepted");
++        std::filesystem::remove_all(root);
++        std::cout << "PASS counters outcome-attribution sampling reset time-partition native-status unfinished exclusive-output invalid-settings\n";
++        return 0;
++    } catch (const std::exception& error) {
++        std::cerr << error.what() << '\n';
++        std::filesystem::remove_all(root);
++        return 1;
++    }
++}
+diff --git a/tests/cpp/test_dominance_profile_labeling.cpp b/tests/cpp/test_dominance_profile_labeling.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..e4b64d768a96369aded94e7a821afb0d46e40415
+--- /dev/null
++++ b/tests/cpp/test_dominance_profile_labeling.cpp
+@@ -0,0 +1,124 @@
++// Reuse the native correction invariant setup and also execute its original checks.
++#define main correction_invariant_fixture_main
++#include "test_label_correction.cpp"
++#undef main
++
++#include <filesystem>
++#include <fstream>
++
++namespace solver {
++struct DominanceProfileTest {
++    static DominanceProfile& Profile(BidirectionalLabeling& solver) {
++        return solver.dominance_profile_;
++    }
++    static void Begin(BidirectionalLabeling& solver) {
++        auto& profile = Profile(solver);
++        profile.Begin({{"fixture", "native_labeling"}});
++        for (int d : {0, 1}) solver.lbl_[d].dominance_profile_ = profile.GetDirection(d);
++    }
++};
++}
++
++int main() {
++    unsetenv("KAYROS_DOMINANCE_PROFILE");
++    if (correction_invariant_fixture_main() != 0) return 1;
++    char pattern[] = "/tmp/kayros-dominance-labeling-XXXXXX";
++    const auto* directory = mkdtemp(pattern);
++    if (!directory) return 2;
++    const std::filesystem::path root(directory);
++    try {
++        using DP = DominanceProfile;
++        using C = DP::Counter;
++        const auto path = root / "profile.jsonl";
++        setenv("KAYROS_DOMINANCE_PROFILE", path.c_str(), 1);
++        setenv("KAYROS_DOMINANCE_PROFILE_STRIDE", "1", 1);
++        setenv("KAYROS_DOMINANCE_PROFILE_OFFSET", "0", 1);
++        {
++            const std::optional<TDNGRoutesParams> ng = std::nullopt;
++            BidirectionalLabeling bidi(instance(), ng);
++            auto& mono = CorrectionInvariantTest::Mono(bidi);
++            auto& profile = DominanceProfileTest::Profile(bidi);
++            DominanceProfileTest::Begin(bidi);
++            bidi.closing_state = false;
++            mono.partial = true;
++            mono.sort_by_cost = true;
++            mono.cost_check_relaxation = mono.elementary_check_relaxation = false;
++            VertexSet a, b;
++            a.set(1).set(2).set(4);
++            b.set(1).set(3).set(4);
++            auto* first = new Label;
++            auto* second = new Label;
++            PWLFunction rising({LinearFunction({0.0, 0.0}, {10.0, 5.0})});
++            initialize(*first, rising, a);
++            initialize(*second, PWLFunction::ConstantFunction(0.5, {0.0, 10.0}), b);
++            mono.U[1].Insert(1, {}) = {first, second};
++            CorrectionInvariantTest::Pool(bidi) = {first, second};
++            Label arriving;
++            initialize(arriving, PWLFunction::ConstantFunction(0.0, {0.0, 1.0}), a);
++            require(CorrectionInvariantTest::Correct(mono, &arriving) == 0, "Partial correction unexpectedly retired a label");
++            const auto& correction = profile.GetDirection(0)->operations[static_cast<size_t>(DP::Kind::Correction)];
++            const auto& surviving = correction.outcomes[0];
++            const auto count = [](const DP::Outcome& outcome, C c) {
++                return outcome.counters.values[static_cast<size_t>(c)];
++            };
++            require(surviving.finished == 1 && surviving.sampled_finished == 1 &&
++                    count(surviving, C::Labels) == 2 && count(surviving, C::SubsetTests) == 2 &&
++                    count(surviving, C::SubsetPass) == 1 && count(surviving, C::SubsetReject) == 1,
++                    "Correction loop filter counts changed");
++            require(count(surviving, C::PartialCalls) == 1 && count(surviving, C::PartialFalse) == 1 &&
++                    count(surviving, C::CostChanges) == 1 && count(surviving, C::Normalizations) == 1 &&
++                    count(surviving, C::Sorts) == 1 && count(surviving, C::PartialShrinkLeft) > 0,
++                    "Surviving correction lost mutation or maintenance counts");
++            CorrectionInvariantTest::Refresh(bidi);
++            const auto& maintenance = profile.GetDirection(0)->operations[static_cast<size_t>(DP::Kind::MergeMaintenance)].outcomes[0];
++            require(count(maintenance, C::MergeDirty) == 1 && count(maintenance, C::MergeUnique) == 1 &&
++                    count(maintenance, C::MergeLabels) == 2 && count(maintenance, C::MergeSorts) == 1,
++                    "Merge repair counts changed");
++            Label query;
++            initialize(query, PWLFunction::ConstantFunction(0.75, {0.0, 10.0}), b);
++            require(CorrectionInvariantTest::Dominated(mono, &query), "Expected candidate elimination");
++            const auto& dominated = profile.GetDirection(0)->operations[static_cast<size_t>(DP::Kind::Dominance)].outcomes[1];
++            require(dominated.finished == 1 && count(dominated, C::PartialCalls) == 1 &&
++                    count(dominated, C::PartialTrue) == 1 && count(dominated, C::PartialErase) > 0,
++                    "Eliminated candidate lost PWL counts");
++            CorrectionInvariantTest::Clean(bidi);
++            // Check a surviving candidate whose prefix was removed by partial dominance.
++            auto* dominator = new Label;
++            initialize(*dominator, PWLFunction::ConstantFunction(0.0, {0.0, 3.0}), a);
++            mono.U[1].Insert(1, {}).push_back(dominator);
++            initialize(query, PWLFunction::ConstantFunction(1.0, {0.0, 10.0}), a);
++            require(!CorrectionInvariantTest::Dominated(mono, &query), "Partially pruned candidate must survive");
++            const auto& survivor = profile.GetDirection(0)->operations[static_cast<size_t>(DP::Kind::Dominance)].outcomes[0];
++            require(survivor.finished == 1 && count(survivor, C::PartialFalse) == 1 &&
++                    count(survivor, C::PartialShrinkLeft) > 0 && count(survivor, C::Normalizations) == 1,
++                    "Surviving candidate lost partial mutation counts");
++            CorrectionInvariantTest::Clean(bidi);
++            // Full-only correction and heuristic cost relaxation retain their existing behavior.
++            mono.partial = false;
++            auto* erased = new Label;
++            initialize(*erased, PWLFunction::ConstantFunction(1.0, {0.0, 10.0}), a);
++            mono.U[1].Insert(1, {}).push_back(erased);
++            initialize(arriving, PWLFunction::ConstantFunction(0.0, {0.0, 10.0}), a);
++            require(CorrectionInvariantTest::Correct(mono, &arriving) == 1, "Full-only correction must retire a label");
++            const auto& eliminated = correction.outcomes[1];
++            require(count(eliminated, C::FullCalls) == 1 && count(eliminated, C::FullTrue) == 1 &&
++                    count(eliminated, C::Retirements) == 1 && count(eliminated, C::Normalizations) == 0,
++                    "Full-only correction counts changed");
++            mono.cost_check_relaxation = true;
++            require(CorrectionInvariantTest::Correct(mono, &arriving) == 0, "Relaxed cost correction must skip");
++            profile.End({{"status", "Finished"}}, 0, 0);
++            DominanceProfileTest::Begin(bidi);
++            require(profile.GetDirection(0)->operations[0].attempts == 0, "Native pricing reset retained counters");
++            profile.End({{"status", "TimeLimitReached"}}, 0, 0);
++            CorrectionInvariantTest::Clean(bidi);
++        }
++        unsetenv("KAYROS_DOMINANCE_PROFILE");
++        std::filesystem::remove_all(root);
++        std::cout << "PASS native dominance correction partial-survivor full-only U-filter merge-maintenance reset\n";
++        return 0;
++    } catch (const std::exception& error) {
++        std::cerr << error.what() << '\n';
++        std::filesystem::remove_all(root);
++        return 1;
++    }
++}
+diff --git a/tests/cpp/test_dominance_profile_pwl.cpp b/tests/cpp/test_dominance_profile_pwl.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..587cb3dc59bbd487b0d6cb00c9ed0044ca46fa43
+--- /dev/null
++++ b/tests/cpp/test_dominance_profile_pwl.cpp
+@@ -0,0 +1,133 @@
++#include "labeling/pwl_domination_function.h"
++
++#include <bit>
++#include <cstdint>
++#include <iostream>
++#include <stdexcept>
++#include <vector>
++
++using namespace goc;
++using namespace solver;
++
++namespace {
++void require(bool condition, const char* message) {
++    if (!condition) throw std::runtime_error(message);
++}
++uint64_t digest = 1469598103934665603ULL;
++void record(double value) {
++    digest ^= std::bit_cast<uint64_t>(value);
++    digest *= 1099511628211ULL;
++}
++void record(const PWLFunction& function) {
++    record(function.PieceCount());
++    for (const auto& piece : function.Pieces()) {
++        record(piece.domain.left); record(piece.domain.right);
++        record(piece.image.left); record(piece.image.right);
++        record(piece.intercept); record(piece.slope);
++        record(piece.is_choice_vertical()); record(piece.is_jump_vertical());
++    }
++}
++void identical(const PWLFunction& left, const PWLFunction& right) {
++    require(left.PieceCount() == right.PieceCount(), "Instrumentation changed piece count");
++    for (int i = 0; i < left.PieceCount(); ++i) {
++        const auto& a = left.Piece(i);
++        const auto& b = right.Piece(i);
++        for (auto pair : {std::pair{a.domain.left, b.domain.left}, std::pair{a.domain.right, b.domain.right},
++                          std::pair{a.image.left, b.image.left}, std::pair{a.image.right, b.image.right},
++                          std::pair{a.intercept, b.intercept}, std::pair{a.slope, b.slope}})
++            require(std::bit_cast<uint64_t>(pair.first) == std::bit_cast<uint64_t>(pair.second),
++                    "Instrumentation changed a piece bit pattern");
++        require(a.is_choice_vertical() == b.is_choice_vertical() && a.is_jump_vertical() == b.is_jump_vertical(),
++                "Instrumentation changed a vertical kind");
++    }
++}
++
++std::vector<PWLFunction> functions() {
++    std::vector<PWLFunction> result;
++    result.push_back(PWLFunction());
++    for (double left : {0.0, 2.0}) {
++        for (double value : {-1.0, 0.0, 3.0}) {
++            result.push_back(PWLFunction::ConstantFunction(value, {left, left}));
++            result.push_back(PWLFunction::ConstantFunction(value, {left, 10.0}));
++            result.push_back(PWLFunction({LinearFunction({left, value}, {10.0, value + 5.0})}));
++        }
++    }
++    PWLFunction choice;
++    choice.AddPiece(LinearFunction({0.0, 3.0}, {0.0, 1.0}).as_choice_vertical());
++    choice.AddPiece(LinearFunction({0.0, 1.0}, {5.0, 2.0}));
++    choice.AddPiece(LinearFunction({5.0, 2.0}, {5.0, -1.0}).as_choice_vertical());
++    result.push_back(choice);
++    PWLFunction jump;
++    jump.AddPiece(LinearFunction({0.0, 1.0}, {3.0, 2.0}));
++    jump.AddPiece(LinearFunction({3.0, 2.0}, {3.0, 5.0}));
++    jump.AddPiece(LinearFunction({3.0, 5.0}, {8.0, 6.0}));
++    result.push_back(jump);
++    return result;
++}
++
++void check_mutation_fixtures() {
++#ifdef KAYROS_DOMINANCE_PROFILING
++    using C = DominanceProfile::Counter;
++    DominanceProfile::Counters counters;
++    const auto count = [&](C counter) { return counters.values[static_cast<size_t>(counter)]; };
++    PWLDominationFunction shrink(PWLFunction::ConstantFunction(1.0, {0.0, 10.0}));
++    shrink.SetProfile(&counters);
++    require(!shrink.DominatePieces(PWLFunction::ConstantFunction(0.0, {0.0, 3.0})), "Prefix removal should survive");
++    require(count(C::PartialShrinkLeft) == 2 && count(C::PartialErase) == 0,
++            "False partial result failed to record prefix mutation");
++    require(static_cast<PWLFunction>(shrink).Domain().left == 4.0, "Prefix fixture shape changed");
++    PWLDominationFunction split(PWLFunction::ConstantFunction(1.0, {0.0, 10.0}));
++    split.SetProfile(&counters);
++    require(!split.DominatePieces(PWLFunction::ConstantFunction(0.0, {3.0, 5.0})), "Interior removal should survive");
++    require(count(C::PartialSplit) == 1 && static_cast<PWLFunction>(split).PieceCount() == 2,
++            "False partial result failed to record a split");
++    PWLDominationFunction erase(PWLFunction::ConstantFunction(1.0, {0.0, 10.0}));
++    erase.SetProfile(&counters);
++    require(erase.DominatePieces(PWLFunction::ConstantFunction(0.0, {0.0, 10.0})), "Full removal should eliminate");
++    require(count(C::PartialErase) == 1 && erase.Empty(), "Erase count changed");
++    PWLDominationFunction full(PWLFunction::ConstantFunction(1.0, {0.0, 10.0}));
++    full.SetProfile(&counters);
++    require(full.IsAlwaysDominated(PWLFunction::ConstantFunction(0.0, {0.0, 10.0})), "Full predicate changed");
++    require(count(C::FullComparisons) > 0 && count(C::FullScalar) == count(C::FullComparisons),
++            "Full-only comparisons were not separate");
++    require(count(C::CompletionCalls) == 4 && count(C::CompletionPieces) >= 4,
++            "Completion accounting changed");
++#endif
++}
++}
++
++int main() {
++    try {
++        check_mutation_fixtures();
++        size_t cases = 0;
++        const auto inputs = functions();
++        for (bool exact : {false, true}) {
++            StepExactArithmeticScope arithmetic(exact);
++            for (const auto& left : inputs) for (const auto& right : inputs) {
++                if (right.Empty()) continue;
++                for (double delta : {-1.0, 0.0, 1.0}) {
++                    for (bool full : {false, true}) {
++                        PWLDominationFunction baseline(left), instrumented(left);
++#ifdef KAYROS_DOMINANCE_PROFILING
++                        DominanceProfile::Counters counters;
++                        instrumented.SetProfile(&counters);
++#endif
++                        const bool a = full ? baseline.IsAlwaysDominated(right, delta) : baseline.DominatePieces(right, delta);
++                        const bool b = full ? instrumented.IsAlwaysDominated(right, delta) : instrumented.DominatePieces(right, delta);
++                        require(a == b, "Instrumentation changed the predicate result");
++                        const auto expected = static_cast<PWLFunction>(baseline);
++                        const auto actual = static_cast<PWLFunction>(instrumented);
++                        identical(expected, actual);
++                        record(a); record(actual);
++                        ++cases;
++                    }
++                }
++            }
++        }
++        std::cout << "PASS native PWL bitwise cases=" << cases << " digest=" << std::hex << digest << '\n';
++        return 0;
++    } catch (const std::exception& error) {
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++}

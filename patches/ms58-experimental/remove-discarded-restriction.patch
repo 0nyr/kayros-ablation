@@ -1,0 +1,12 @@
+diff --git a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+index 6714d11b70550c110fec2a13fa3bab6d46a76a0f..5f9efec66574440598aec036879291093532bf49 100644
+--- a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+@@ -363,7 +363,6 @@ Label* MonodirectionalLabeling::ExtensionStep(const LazyLabel& ll) const
+ 	}
+ 	else
+ 		lv->duration = (l->duration + vrp_.tau[u][v]).Compose(vrp_.dep[u][v]);
+-	if (limited_extension && !cross) lv->duration.RestrictDomain({0.0, t_m});
+ 	lv->duration = normalize_pwl(lv->duration); // kayros (M5.7): heal epsilon-dust piece misorder.
+ 	if (lv->duration.Empty())
+ 	{

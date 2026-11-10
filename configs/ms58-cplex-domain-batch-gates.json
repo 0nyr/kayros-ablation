@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "status": "source_only_unbuilt_unmeasured_unselected",
+  "launchable": false,
+  "purpose": "Conditional next-pass native parity and Dabia-only development comparison",
+  "candidate": {
+    "variant": "cplex-domain-batch",
+    "source_id": "cd5dee0b2543e9aa65718889379bedc6181d3161",
+    "base_source_id": "327e481713e1b9a3187fda2fc9f10f8d9d75b0c5",
+    "archive": "outputs/ms58/dabia-20261110/cplex-domain-batch-source.tar.gz",
+    "archive_sha256": "c9d76179f02077e43576aa51ecc1dc56e4858fdf7e4fc511196fecd71b570881",
+    "source_identity": "outputs/ms58/dabia-20261110/cplex-domain-batch-source-identity.json",
+    "full_patch": "patches/ms58-experimental/cplex-domain-batch-full.patch",
+    "full_patch_sha256": "057fe3dec78bbbbf38cb629994a78c6624fafd85e9177fdf29f5adca976a455c",
+    "full_patch_base": "07879253091fe9e895cc8071aa69ccd0b2310634",
+    "patch_count_with_baseline": 5,
+    "diagnostic_environment": {},
+    "extension_profiling": false
+  },
+  "native_gate": {
+    "status": "pending",
+    "cmake_target": "ms58_cplex_domain_fixture",
+    "executable": "build/cplex/cpp/lera/ms58_cplex_domain_fixture",
+    "expected_case_records": 17,
+    "required_json_passed": true,
+    "required_returncode": 0,
+    "required_backend": "CPLEX",
+    "scope": "13 native model cases plus 2 exception cases, virtual accessors and production solve_lp integration",
+    "allocation_failure_partial_state_equivalence_established": false,
+    "full_bridge_and_ils_bpc_regression_gate": "pending_separate_validation"
+  },
+  "proposed_run": {
+    "status": "not_prepared_or_launched",
+    "benchmark_family": "Dabia2013",
+    "num_customers": 100,
+    "instances": ["C201", "RC201"],
+    "repetitions": [1, 2, 3],
+    "scheduled_cells": 18,
+    "horizon_s": 600,
+    "memory_mb": 16384,
+    "clock_origin": "solver_process_launch_including_initialization",
+    "prefix_s": null,
+    "seed": null,
+    "reference_manifest": "references/dabia2013-n100-v011-2026-11-09/manifest.json",
+    "reference_manifest_sha256": "ea7310862b191655ff3109ee303afdd9dd420664da4ebb82ea30790ac415af66",
+    "sources": {
+      "best": "327e481713e1b9a3187fda2fc9f10f8d9d75b0c5",
+      "cplex-domain-batch": "cd5dee0b2543e9aa65718889379bedc6181d3161",
+      "minimal-lera": "f2c9e20"
+    },
+    "upstream_binary_sha256": "59ce565d28ada373f5ae59a13691e64e4f9976e6ed79e4a48808d84fb1110783",
+    "upstream_patch_sha256": "ba75d827faff78c1c12fe73774ca658fe28fe96cd4806ee69502db8e6f685bbf",
+    "orders": [
+      {"instance": "C201", "replicate": 1, "variants": ["best", "cplex-domain-batch", "minimal-lera"]},
+      {"instance": "C201", "replicate": 2, "variants": ["cplex-domain-batch", "minimal-lera", "best"]},
+      {"instance": "C201", "replicate": 3, "variants": ["minimal-lera", "best", "cplex-domain-batch"]},
+      {"instance": "RC201", "replicate": 1, "variants": ["best", "minimal-lera", "cplex-domain-batch"]},
+      {"instance": "RC201", "replicate": 2, "variants": ["minimal-lera", "cplex-domain-batch", "best"]},
+      {"instance": "RC201", "replicate": 3, "variants": ["cplex-domain-batch", "best", "minimal-lera"]}
+    ],
+    "affinity_policy": "One physical core per serial triplet, all arms share its host and CPU",
+    "builds_completed_before_timings": true,
+    "retention": "All scheduled outcomes, unfavorable results, deadlines and resource failures",
+    "selection_rule": "No promotion from this source-only design or this 2-instance panel alone"
+  }
+}

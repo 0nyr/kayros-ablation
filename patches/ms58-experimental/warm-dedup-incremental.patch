@@ -1,0 +1,98 @@
+diff --git a/cpp/lera/bridge/lera_bridge.cpp b/cpp/lera/bridge/lera_bridge.cpp
+index ffebe522ab9d88b289343166042bf50ca2ab5444..87cc28580efa38536aa96935ec6bc6311f7d4b02 100644
+--- a/cpp/lera/bridge/lera_bridge.cpp
++++ b/cpp/lera/bridge/lera_bridge.cpp
+@@ -31,6 +31,9 @@ namespace kayros::lera {
+ 
+ namespace {
+ 
++// Warm-handoff experiment, fixed per source revision.
++constexpr const char* kWarmStartPolicy = "columns_and_incumbent_deduplicated";
++
+ // Checker-exact certification instance (M5.6 stage A) built from the payload's
+ // mamut_raw section: untouched MAMUT ATF breakpoints, TWs and service times
+ // (Lera's preprocessing folds service/waiting into travel times and shifts
+@@ -143,15 +146,15 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     // (resets any sticky tripped state from a previous solve in-process).
+     MemoryMonitor::SetLimitBytes((int64_t)(params.memory_limit_mb * 1048576.0));
+ 
+-    // Warm start (M5.3): reprice each heuristic route with the checker-exact
+-    // fold (M5.6 stage A: the master's arithmetic) and add it as an initial
+-    // column. Checker-infeasible routes are skipped; the UB is only set when
+-    // the added routes still partition the customers exactly.
++    // Reprice every witness route before considering an initial UB. The UB
++    // requires the feasible routes to partition the customers exactly and
++    // remains independent of how many columns this experimental policy inserts.
+     nlohmann::json warm_log;
+     if (!params.initial_routes.empty()) {
+         vector<int> cover(vrp.D.NbVertices(), 0);
+         double ub_value = 0.0;
+-        int added = 0;
++        int feasible = 0, added = 0;
++        int duplicates = 0;
+         bool valid_ub = true;
+         for (const auto& customers : params.initial_routes) {
+             GraphPath path;
+@@ -160,19 +163,27 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+             path.push_back(vrp.d);
+             auto ev = checker_eval(checker_inst, path);
+             if (!ev.feasible) { valid_ub = false; continue; }
+-            column_keys.insert(path_key(path));
+-            spf.AddRoute(Route(path, ev.departure, ev.duration));
+-            ++added;
++            ++feasible;
+             ub_value += ev.duration;
+             for (int c : customers) ++cover[c];
++            // A duplicate still contributes to the witness UB and coverage.
++            if (!column_keys.insert(path_key(path)).second) { ++duplicates; continue; }
++            spf.AddRoute(Route(path, ev.departure, ev.duration));
++            ++added;
+         }
+         for (Vertex v : exclude(vrp.D.Vertices(), {vrp.o, vrp.d})) valid_ub &= cover[v] == 1;
+-        if (valid_ub && added > 0) bcp.SetInitialIncumbent(ub_value);
++        const bool ub_set = valid_ub && feasible > 0;
++        if (ub_set) bcp.SetInitialIncumbent(ub_value);
++        warm_log["policy"] = kWarmStartPolicy;
+         warm_log["routes_given"] = params.initial_routes.size();
++        warm_log["routes_feasible"] = feasible;
+         warm_log["routes_added"] = added;
+-        if (valid_ub && added > 0) warm_log["ub"] = ub_value;
+-        clog << "Warm start: " << added << "/" << params.initial_routes.size()
+-             << " columns added" << (valid_ub && added > 0 ? ", UB set" : ", no UB") << endl;
++        warm_log["duplicate_columns_skipped"] = duplicates;
++        warm_log["ub_set"] = ub_set;
++        warm_log["witness_storage"] = "caller";
++        if (ub_set) warm_log["ub"] = ub_value;
++        clog << "Warm start (" << kWarmStartPolicy << "): " << added << "/" << params.initial_routes.size()
++             << " columns added" << (ub_set ? ", UB set" : ", no UB") << endl;
+     }
+ 
+     int exact_calls = 0, exact_finished = 0;
+@@ -391,6 +402,7 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     nlohmann::json result;
+     result["effective_backend_settings"] = goc::ablation_backend_settings();
+     result["effective_algorithm_settings"] = {{"cut_limit", params.cut_limit}, {"cut_violation_threshold", 0.1}, {"algorithm_epsilon", 1e-6}, {"solution_limit", params.solution_limit}, {"node_limit", params.node_limit}, {"stab_alpha", params.stab_alpha}, {"ng_routes", false}};
++    result["effective_algorithm_settings"]["warm_start_policy"] = kWarmStartPolicy;
+     result["effective_algorithm_settings"]["label_correction"] = lbl.correcting;
+     result["effective_algorithm_settings"]["lazy_extension"] = lbl.lazy_extension;
+     result["exact_log"] = log;
+diff --git a/src/kayros/lera/__init__.py b/src/kayros/lera/__init__.py
+index edcef759f4667bbab72171c045109b67f77468ef..31b91fe82ae918820e1404224ae16b1a816363b3 100644
+--- a/src/kayros/lera/__init__.py
++++ b/src/kayros/lera/__init__.py
+@@ -238,14 +238,7 @@ def solve_duration(
+     Lera numbering). Keep the hook cheap — the solve blocks on it; an exception
+     raised inside it aborts the solve and propagates.
+ 
+-    ``initial_routes`` warm-starts the BPC with heuristic incumbent
+-    routes as customer-id sequences without depots (``kayros.Solution.routes``
+-    fits directly). They are repriced under the solver's own arithmetic, added
+-    as initial columns, and — when they still partition the customers — their
+-    total becomes the initial upper bound; the result carries a ``warm_start``
+-    record. If the BPC proves optimality without improving on that bound, the
+-    result has the proven ``value`` but an **empty** ``routes`` list: the
+-    initial routes are the optimum and the caller already holds them.
++    ``initial_routes`` supplies heuristic incumbent routes as customer-id sequences without depots (``kayros.Solution.routes`` fits directly). This experimental deduplication variant reprices every route with checker arithmetic and inserts only paths absent from the initial master. The initial upper bound sums all feasible witness routes, including skipped duplicate columns, when they partition the customers exactly. The result records the policy, feasible route count, actual added column count, skipped duplicate count, and UB eligibility in ``warm_start``. The caller retains the checked witness. If BPC proves optimality without improving the bound, the result has the proven ``value`` and an empty ``routes`` list, and the caller uses its retained witness.
+ 
+     Gap diagnostic: on ``TimeLimitReached``, ``exact_log.best_bound``
+     is a valid lower bound whenever the root relaxation finished (the best

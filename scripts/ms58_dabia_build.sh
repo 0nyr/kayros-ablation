@@ -2,7 +2,7 @@
 set -euo pipefail
 variant=${1:?source variant}
 backend=${2:?cplex or highs}
-case "$variant" in best|scratch|safe-correction) ;; *) exit 2 ;; esac
+case "$variant" in best|scratch|safe-correction|correction-on|extension-profile|cplex-domain-batch) ;; *) exit 2 ;; esac
 case "$backend" in cplex|highs) ;; *) exit 2 ;; esac
 test -n "${OAR_JOB_ID:?}"
 case "$(hostname -s)" in grvingt-*|grappe-*|grdix-*|gros-*) ;; *) exit 3 ;; esac
@@ -16,6 +16,10 @@ module load boost
 cd "$root/sources/$variant"
 mkdir -p "$root/artifacts/$variant-$backend" "$run/build-logs"
 test ! -f "$run/build-logs/$variant-$backend.complete"
+extra_build_settings=()
+if [[ "$variant" == extension-profile ]]; then
+    extra_build_settings+=(--config-setting=cmake.define.KAYROS_EXTENSION_PROFILING=ON)
+fi
 {
     date -Is
     hostname
@@ -27,7 +31,8 @@ test ! -f "$run/build-logs/$variant-$backend.complete"
         --out-dir "$root/artifacts/$variant-$backend" \
         --config-setting=cmake.define.KAYROS_WITH_LERA=ON \
         --config-setting="cmake.define.LERA_LP_BACKEND=$backend" \
-        --config-setting="build-dir=build/$backend"
+        --config-setting="build-dir=build/$backend" \
+        "${extra_build_settings[@]}"
     "$HOME/.local/bin/uv" venv --python 3.13 "$root/venv-$variant-$backend"
     "$HOME/.local/bin/uv" pip install --python "$root/venv-$variant-$backend/bin/python" \
         -r "$HOME/ms56-phase2/solver/requirements-checker.txt" \

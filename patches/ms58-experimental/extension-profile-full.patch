@@ -1,0 +1,1368 @@
+diff --git a/cpp/lera/CMakeLists.txt b/cpp/lera/CMakeLists.txt
+index 53f18f9..ba0b230 100644
+--- a/cpp/lera/CMakeLists.txt
++++ b/cpp/lera/CMakeLists.txt
+@@ -42,6 +42,13 @@ endif()
+ 
+ add_library(lera STATIC ${LERA_GOC_SOURCES} ${LERA_NYR_SOURCES} ${LERA_MAIN_SOURCES})
+ 
++# Experimental diagnostic build. PUBLIC keeps class layouts consistent in _lera.
++# This definition never reaches the independent _core/ILS target.
++option(KAYROS_EXTENSION_PROFILING "Compile experimental sampled extension diagnostics" OFF)
++if(KAYROS_EXTENSION_PROFILING)
++    target_compile_definitions(lera PUBLIC KAYROS_EXTENSION_PROFILING=1)
++endif()
++
+ # kayros' C++23 baseline; the vendored code predates it (upstream used C++26
+ # permissively, but nothing needs it — 23 keeps GCC 13 toolchains buildable).
+ target_compile_features(lera PUBLIC cxx_std_23)
+diff --git a/cpp/lera/goc/include/goc/math/pwl_function.h b/cpp/lera/goc/include/goc/math/pwl_function.h
+index 914d6d5..92eece0 100644
+--- a/cpp/lera/goc/include/goc/math/pwl_function.h
++++ b/cpp/lera/goc/include/goc/math/pwl_function.h
+@@ -26,16 +26,20 @@ namespace goc
+ //           hold an operand back for any stacked boundary piece. These rules
+ //           are what the exact value-jump labeling needs on step-carrying
+ //           (stepwise-ATF) instances.
+-//   false = the pre-M13.0 (kayros 1.0.0) rules, which preserve only JUMP
++//   false = the pre-M13.0 (kayros 1.0.0) rules with the scalar-point addition
++//           repair, which preserve only JUMP
+ //           verticals in Compose, pair operator+ verticals by image order, and
+ //           hold back only for a boundary vertical after a non-vertical piece.
++//           Addition also retains a single nonvertical point operand across
++//           stacked CHOICE pieces at exactly the same abscissa.
+ //
+ // Why the switch exists: CHOICE verticals (from Inverse of a departure
+ // plateau) and set-valued label durations occur on JUMP-FREE instances too, so
+ // the M13.0 rules were never confined to the exact path the way M13.0 assumed.
+ // On jump-free instances they change the audited v1.0.0 arithmetic and
+-// over-certify (M13.3). The flag restores the documented intent: jump-free
+-// solves take the v1.0.0 arithmetic bit-identically.
++// over-certify (M13.3). The flag retains the legacy arithmetic on jump-free
++// solves, except for the scalar-point addition repair needed to preserve all
++// attainable departure choices on a tight connection.
+ //
+ // Process-global, defaulting to the M13.0 rules (the library semantics the goc
+ // unit tests pin). `kayros::lera::solve_duration_json` sets it per solve from
+diff --git a/cpp/lera/goc/src/math/pwl_function.cpp b/cpp/lera/goc/src/math/pwl_function.cpp
+index 99f4e9e..68ba8a8 100644
+--- a/cpp/lera/goc/src/math/pwl_function.cpp
++++ b/cpp/lera/goc/src/math/pwl_function.cpp
+@@ -840,6 +840,15 @@ bool hold_back_for_stacked_piece(const PWLFunction& f, int i, const LinearFuncti
+ PWLFunction operator+(const PWLFunction& f, const PWLFunction& g)
+ {
+     PWLFunction h;
++    // Label durations can contain stacked departure choices on jump-free
++    // inputs. At a scalar point operand, advancing after the first choice
++    // discards attainable lower durations. Keep this repair confined to legacy
++    // CHOICE-to-CHOICE tails, leaving JUMP attainment and step-mode rules intact.
++    const bool legacy = !step_exact_arithmetic();
++    const bool f_scalar_point = legacy && f.PieceCount() == 1 && !f.Piece(0).is_vertical()
++        && f.Piece(0).domain.left == f.Piece(0).domain.right;
++    const bool g_scalar_point = legacy && g.PieceCount() == 1 && !g.Piece(0).is_vertical()
++        && g.Piece(0).domain.left == g.Piece(0).domain.right;
+     int i = 0, j = 0;
+     while (i < f.PieceCount() && j < g.PieceCount())
+     {
+@@ -886,6 +895,12 @@ PWLFunction operator+(const PWLFunction& f, const PWLFunction& g)
+         // Stacked-boundary hold-back (see hold_back_for_stacked_piece above).
+         bool f_stack_next = hold_back_for_stacked_piece(f, i, pf);
+         bool g_stack_next = hold_back_for_stacked_piece(g, j, pg);
++        if (g_scalar_point && pf.is_choice_vertical() && i + 1 < f.PieceCount()
++            && f.Piece(i + 1).is_choice_vertical()
++            && f.Piece(i + 1).domain.left == pg.domain.left) f_stack_next = true;
++        if (f_scalar_point && pg.is_choice_vertical() && j + 1 < g.PieceCount()
++            && g.Piece(j + 1).is_choice_vertical()
++            && g.Piece(j + 1).domain.left == pf.domain.left) g_stack_next = true;
+         if (epsilon_equal(pf.domain.right, pg.domain.right))
+         {
+             if (f_stack_next) { ++i; }
+@@ -1110,4 +1125,4 @@ double PWLFunction::compute_area() const
+ }
+ 
+ 
+-} // namespace goc
+\ No newline at end of file
++} // namespace goc
+diff --git a/cpp/lera/main/include/bcp/branch_trace.h b/cpp/lera/main/include/bcp/branch_trace.h
+new file mode 100644
+index 0000000..195cb04
+--- /dev/null
++++ b/cpp/lera/main/include/bcp/branch_trace.h
+@@ -0,0 +1,88 @@
++#pragma once
++
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <stdexcept>
++
++namespace solver
++{
++// A first-branch diagnostic. With no environment path this does no IO.
++// The file is exclusive and flushed before any strong-branching probe.
++class FirstBranchTrace
++{
++public:
++    FirstBranchTrace()
++    {
++        static bool claimed = false;
++        const char* path = std::getenv("KAYROS_FIRST_BRANCH_TRACE");
++        if (path == nullptr || *path == '\0' || claimed) return;
++        claimed = true;
++        stream_ = std::fopen(path, "wx");
++        if (stream_ == nullptr) throw std::runtime_error("Cannot exclusively create first-branch trace");
++    }
++
++    ~FirstBranchTrace() { if (stream_) std::fclose(stream_); }
++    FirstBranchTrace(const FirstBranchTrace&) = delete;
++    FirstBranchTrace& operator=(const FirstBranchTrace&) = delete;
++    explicit operator bool() const { return stream_ != nullptr; }
++
++    template<class Arcs, class Matrix, class Valuation>
++    void Begin(int node, double bound, const Arcs& canonical, const Matrix& x,
++               const Arcs& legacy, const Matrix& raw_x, const Valuation& raw)
++    {
++        std::fprintf(stream_, "{\"event\":\"first_branch_begin\",\"node\":%d,\"bound\":", node);
++        Number(bound);
++        std::fprintf(stream_, ",\"raw_valuation_order\":[");
++        bool comma = false;
++        for (const auto& item : raw)
++        {
++            if (comma) std::fprintf(stream_, ",");
++            comma = true;
++            std::fprintf(stream_, "[%d,", item.first.Index());
++            Number(item.second);
++            std::fprintf(stream_, "]");
++        }
++        std::fprintf(stream_, "],\"canonical_candidates\":[");
++        Candidates(canonical, x);
++        std::fprintf(stream_, "],\"legacy_order_candidates\":[");
++        Candidates(legacy, raw_x);
++        std::fprintf(stream_, "]}\n");
++        std::fflush(stream_);
++    }
++
++    void Finish(int tail, int head, double estimate)
++    {
++        if (!stream_) return;
++        std::fprintf(stream_, "{\"event\":\"first_branch_selected\",\"tail\":%d,\"head\":%d,\"estimate\":", tail, head);
++        Number(estimate);
++        std::fprintf(stream_, "}\n");
++        std::fflush(stream_);
++    }
++
++private:
++    void Number(double value)
++    {
++        if (std::isfinite(value)) std::fprintf(stream_, "%.17g", value);
++        else std::fprintf(stream_, "null");
++    }
++
++    template<class Arcs, class Matrix>
++    void Candidates(const Arcs& arcs, const Matrix& x)
++    {
++        bool comma = false;
++        for (const auto& arc : arcs)
++        {
++            if (comma) std::fprintf(stream_, ",");
++            comma = true;
++            std::fprintf(stream_, "{\"tail\":%d,\"head\":%d,\"fraction\":", arc.tail, arc.head);
++            Number(x[arc.tail][arc.head]);
++            std::fprintf(stream_, ",\"distance_from_half\":");
++            Number(std::fabs(0.5 - x[arc.tail][arc.head]));
++            std::fprintf(stream_, "}");
++        }
++    }
++
++    std::FILE* stream_ = nullptr;
++};
++} // namespace solver
+diff --git a/cpp/lera/main/include/bcp/ordered_valuation.h b/cpp/lera/main/include/bcp/ordered_valuation.h
+new file mode 100644
+index 0000000..9f692e3
+--- /dev/null
++++ b/cpp/lera/main/include/bcp/ordered_valuation.h
+@@ -0,0 +1,21 @@
++#pragma once
++
++#include <algorithm>
++#include <utility>
++#include <vector>
++
++#include "goc/linear_programming/model/valuation.h"
++
++namespace solver
++{
++// Variable identity hashes contain allocation addresses. Numerical reductions
++// instead visit the current formulation columns in a reproducible order.
++inline std::vector<std::pair<goc::Variable, double>> ordered_valuation(const goc::Valuation& valuation)
++{
++    std::vector<std::pair<goc::Variable, double>> values(valuation.begin(), valuation.end());
++    std::sort(values.begin(), values.end(), [](const auto& left, const auto& right) {
++        return left.first.Index() < right.first.Index();
++    });
++    return values;
++}
++} // namespace solver
+diff --git a/cpp/lera/main/include/labeling/bidirectional_labeling.h b/cpp/lera/main/include/labeling/bidirectional_labeling.h
+index db06db3..896e19a 100644
+--- a/cpp/lera/main/include/labeling/bidirectional_labeling.h
++++ b/cpp/lera/main/include/labeling/bidirectional_labeling.h
+@@ -58,6 +58,9 @@ public:
+ 	);
+ 	
+ private:
++#ifdef KAYROS_EXTENSION_PROFILING
++	ExtensionProfile extension_profile_;
++#endif
+ 	// Sets the labeling level flags based on the given level.
+ 	void setup_labeling_level_flag(
+ 		LabelingLevel level
+diff --git a/cpp/lera/main/include/labeling/extension_profile.h b/cpp/lera/main/include/labeling/extension_profile.h
+new file mode 100644
+index 0000000..331953c
+--- /dev/null
++++ b/cpp/lera/main/include/labeling/extension_profile.h
+@@ -0,0 +1,287 @@
++#pragma once
++
++// Experimental ms58 instrumentation. This header and all call sites are excluded
++// unless KAYROS_EXTENSION_PROFILING is enabled for the lera target.
++#ifdef KAYROS_EXTENSION_PROFILING
++
++#include <array>
++#include <charconv>
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <stdexcept>
++#include <string>
++#include <utility>
++
++#include "goc/lib/json.hpp"
++
++namespace solver
++{
++class ExtensionProfile
++{
++public:
++    using Clock = std::chrono::steady_clock;
++    using Json = nlohmann::json;
++    enum class Stage {
++        Feasibility, AllocationResources, ArithmeticGate, BeforeWindow,
++        Addition, Subtraction, Composition, Restriction, Normalization,
++        VisitedSet, Unreachable, CutResources, Finalize, Count
++    };
++    enum class Event {
++        ParentEmpty, ArrivalInfinite, DepotTriangle, BeforeWindow, StepArc,
++        LegacyArc, NormalizeFast, NormalizeRebuilt, DurationEmpty,
++        NgVisited, FullVisited, StrongUnreachable, WeakUnreachable,
++        ReturnedLabel, Count
++    };
++    enum class Pieces { Parent, Travel, Departure, Arithmetic, Composed, Normalized, Count };
++
++private:
++    struct StageTotals {
++        uint64_t entries = 0, sampled_entries = 0, sampled_ns = 0;
++    };
++    struct PieceTotals {
++        uint64_t observations = 0, sum = 0, maximum = 0;
++    };
++    struct Totals {
++        uint64_t attempts = 0, sampled_attempts = 0, sampled_finished = 0;
++        uint64_t sampled_total_ns = 0;
++        std::array<StageTotals, static_cast<size_t>(Stage::Count)> stages{};
++        std::array<uint64_t, static_cast<size_t>(Event::Count)> events{};
++        std::array<PieceTotals, static_cast<size_t>(Pieces::Count)> pieces{};
++    };
++
++    FILE* file_ = nullptr;
++    uint64_t stride_ = 1009, offset_ = 0, call_ = 0;
++    std::array<Totals, 2> totals_{};
++    Clock::time_point started_{}, last_output_{};
++    bool active_ = false;
++
++    static uint64_t EnvInteger(const char* name, uint64_t fallback)
++    {
++        const char* value = std::getenv(name);
++        if (!value) return fallback;
++        uint64_t result = 0;
++        const char* end = value + std::strlen(value);
++        const auto parsed = std::from_chars(value, end, result);
++        if (parsed.ec != std::errc{} || parsed.ptr != end)
++            throw std::runtime_error(std::string("Invalid extension profile integer: ") + name);
++        return result;
++    }
++
++    static uint64_t Nanoseconds(Clock::duration value)
++    {
++        return std::chrono::duration_cast<std::chrono::nanoseconds>(value).count();
++    }
++
++    void Write(Json record)
++    {
++        record["schema"] = "kayros-ms58-extension-profile-v1";
++        record["diagnostic_only"] = true;
++        record["call"] = call_;
++        const auto line = record.dump() + '\n';
++        if (std::fwrite(line.data(), 1, line.size(), file_) != line.size() || std::fflush(file_) != 0)
++            throw std::runtime_error("Cannot write extension profile");
++    }
++
++    Json Direction(int direction) const
++    {
++        static constexpr const char* stage_names[] = {
++            "feasibility", "allocation_scalar_resources", "arithmetic_gate",
++            "before_window", "pwl_addition", "pwl_subtraction", "pwl_composition",
++            "domain_restriction", "normalization", "visited_set", "unreachable",
++            "cut_resources", "finalize"
++        };
++        static constexpr const char* event_names[] = {
++            "reject_parent_empty", "reject_arrival_infinite", "reject_depot_triangle",
++            "branch_before_window", "branch_step_arc", "branch_legacy_arc",
++            "normalize_fast", "normalize_rebuilt", "reject_duration_empty",
++            "visited_ng", "visited_full", "unreachable_strong", "unreachable_weak",
++            "returned_label"
++        };
++        static constexpr const char* piece_names[] = {
++            "parent", "travel", "departure", "arithmetic_result", "composed", "normalized"
++        };
++        static_assert(std::size(stage_names) == static_cast<size_t>(Stage::Count));
++        static_assert(std::size(event_names) == static_cast<size_t>(Event::Count));
++        static_assert(std::size(piece_names) == static_cast<size_t>(Pieces::Count));
++        const auto& t = totals_[direction];
++        Json result = {{"attempts", t.attempts}, {"sampled_attempts", t.sampled_attempts},
++            {"sampled_finished", t.sampled_finished}, {"sampled_total_ns", t.sampled_total_ns}};
++        for (size_t i = 0; i < t.stages.size(); ++i) {
++            const auto& s = t.stages[i];
++            result["stages"][stage_names[i]] = {{"entries", s.entries},
++                {"sampled_entries", s.sampled_entries}, {"sampled_ns", s.sampled_ns}};
++        }
++        for (size_t i = 0; i < t.events.size(); ++i)
++            result["events"][event_names[i]] = t.events[i];
++        for (size_t i = 0; i < t.pieces.size(); ++i) {
++            const auto& p = t.pieces[i];
++            result["sampled_pieces"][piece_names[i]] = {{"observations", p.observations},
++                {"sum", p.sum}, {"maximum", p.maximum}};
++        }
++        return result;
++    }
++
++    Json Snapshot(const char* event, bool returned) const
++    {
++        return {{"event", event}, {"pricing_returned", returned},
++            {"elapsed_wall_ns", Nanoseconds(Clock::now() - started_)},
++            {"forward", Direction(0)}, {"backward", Direction(1)}};
++    }
++
++public:
++    ExtensionProfile()
++    {
++        const char* path = std::getenv("KAYROS_EXTENSION_PROFILE");
++        if (!path || !*path) return;
++        stride_ = EnvInteger("KAYROS_EXTENSION_PROFILE_STRIDE", 1009);
++        offset_ = EnvInteger("KAYROS_EXTENSION_PROFILE_OFFSET", 0);
++        if (stride_ == 0 || offset_ >= stride_)
++            throw std::runtime_error("Extension profile requires stride > 0 and offset < stride");
++        file_ = std::fopen(path, "wx");
++        if (!file_) throw std::runtime_error("Cannot exclusively create extension profile");
++        try {
++            Write({{"event", "profile_open"}, {"base_source", "327e481713e1b9a3187fda2fc9f10f8d9d75b0c5"},
++                {"sample_stride", stride_}, {"sample_offset", offset_},
++                {"sample_rule", "zero_based_attempt_mod_stride_equals_offset_per_direction_per_task"},
++                {"clock", "steady_clock"}, {"timer_units", "ns"},
++                {"timing_scope", "exclusive sampled extension stage wall time including instrumentation"},
++                {"progress_minimum_seconds", 5}, {"unfinished_rule", "no pricing_end means unfinished"}});
++        } catch (...) {
++            std::fclose(file_);
++            file_ = nullptr;
++            throw;
++        }
++    }
++
++    ~ExtensionProfile() { if (file_) std::fclose(file_); }
++    ExtensionProfile(const ExtensionProfile&) = delete;
++    ExtensionProfile& operator=(const ExtensionProfile&) = delete;
++    bool Enabled() const { return file_ != nullptr; }
++
++    void Begin(Json context)
++    {
++        if (!Enabled()) return;
++        if (active_) throw std::runtime_error("Extension profile task reentry");
++        totals_ = {};
++        ++call_;
++        started_ = last_output_ = Clock::now();
++        active_ = true;
++        Json record = Snapshot("pricing_begin", false);
++        record["context"] = std::move(context);
++        Write(std::move(record));
++    }
++
++    void MaybeProgress()
++    {
++        if (!active_) return;
++        const auto now = Clock::now();
++        if (now - last_output_ < std::chrono::seconds(5)) return;
++        Write(Snapshot("pricing_progress", false));
++        last_output_ = now;
++    }
++
++    void End(Json native_log, size_t returned_routes, size_t pool_size)
++    {
++        if (!Enabled()) return;
++        Json record = Snapshot("pricing_end", true);
++        record["native_log"] = std::move(native_log);
++        record["returned_routes"] = returned_routes;
++        record["pool_size"] = pool_size;
++        Write(std::move(record));
++        active_ = false;
++    }
++
++    class Episode
++    {
++        ExtensionProfile* owner_;
++        Totals* totals_ = nullptr;
++        Stage stage_ = Stage::Feasibility;
++        bool sampled_ = false, finished_ = false;
++        Clock::time_point start_{}, last_{};
++
++    public:
++        Episode(ExtensionProfile* owner, int direction) : owner_(owner)
++        {
++            if (!owner || !owner->active_) return;
++            totals_ = &owner->totals_[direction];
++            const auto ordinal = totals_->attempts++;
++            sampled_ = ordinal % owner->stride_ == owner->offset_;
++            ++totals_->stages[static_cast<size_t>(stage_)].entries;
++            if (sampled_) {
++                ++totals_->sampled_attempts;
++                ++totals_->stages[static_cast<size_t>(stage_)].sampled_entries;
++                start_ = last_ = Clock::now();
++            }
++        }
++        // Finish is explicit on all normal returns. An exception leaves a
++        // sampled attempt unfinished and the pricing begin unmatched.
++        Episode(const Episode&) = delete;
++        Episode& operator=(const Episode&) = delete;
++        bool Sampled() const { return sampled_; }
++
++        void Switch(Stage stage)
++        {
++            if (!totals_) return;
++            if (sampled_) {
++                const auto now = Clock::now();
++                totals_->stages[static_cast<size_t>(stage_)].sampled_ns += Nanoseconds(now - last_);
++                last_ = now;
++                ++totals_->stages[static_cast<size_t>(stage)].sampled_entries;
++            }
++            stage_ = stage;
++            ++totals_->stages[static_cast<size_t>(stage)].entries;
++        }
++        void Mark(Event event)
++        {
++            if (totals_) ++totals_->events[static_cast<size_t>(event)];
++        }
++        void Observe(Pieces kind, int count)
++        {
++            if (!sampled_) return;
++            auto& p = totals_->pieces[static_cast<size_t>(kind)];
++            ++p.observations;
++            p.sum += count;
++            if (static_cast<uint64_t>(count) > p.maximum) p.maximum = count;
++        }
++        template<class Function>
++        Function&& ThenCompose(Function&& value)
++        {
++            if (sampled_) Observe(Pieces::Arithmetic, value.PieceCount());
++            Switch(Stage::Composition);
++            // Forward the same temporary into Compose. Its lifetime still
++            // ends at the original full expression, after the assignment.
++            return std::forward<Function>(value);
++        }
++        template<class Function>
++        auto Measure(Stage stage, Function&& function) -> decltype(function())
++        {
++            const Stage previous = stage_;
++            Switch(stage);
++            // Used for scalar/bitset work. PWL expressions use ThenCompose
++            // to retain their original temporary lifetime and assignment.
++            struct Restore {
++                Episode& episode;
++                Stage previous;
++                ~Restore() { episode.Switch(previous); }
++            } restore{*this, previous};
++            return function();
++        }
++        void Finish()
++        {
++            if (!totals_ || finished_) return;
++            finished_ = true;
++            if (sampled_) {
++                const auto now = Clock::now();
++                totals_->stages[static_cast<size_t>(stage_)].sampled_ns += Nanoseconds(now - last_);
++                totals_->sampled_total_ns += Nanoseconds(now - start_);
++                ++totals_->sampled_finished;
++                owner_->MaybeProgress();
++            }
++        }
++    };
++};
++} // namespace solver
++#endif
+diff --git a/cpp/lera/main/include/labeling/monodirectional_labeling.h b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+index c9c06fb..4daa231 100644
+--- a/cpp/lera/main/include/labeling/monodirectional_labeling.h
++++ b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+@@ -17,6 +17,9 @@
+ #include "lazy_label.h"
+ #include "bcp/pricing_problem.h"
+ #include "ng_neighborhoods.h"
++#ifdef KAYROS_EXTENSION_PROFILING
++#include "extension_profile.h"
++#endif
+ 
+ namespace solver
+ {
+@@ -74,6 +77,11 @@ public:
+ 	LazyLabel Init() const;
+ 	
+ private:
++#ifdef KAYROS_EXTENSION_PROFILING
++	friend class BidirectionalLabeling;
++	ExtensionProfile* extension_profile_ = nullptr;
++	int extension_profile_direction_ = 0;
++#endif
+ 	// The extension step consists in taking a lazy label and building the complete label.
+ 	// Returns: the extended full label (notice that it may be infeasible, so it may be nullptr).
+ 	Label* ExtensionStep(const LazyLabel& ll) const;
+diff --git a/cpp/lera/main/src/bcp/bcp.cpp b/cpp/lera/main/src/bcp/bcp.cpp
+index ae9e67b..17c4f88 100644
+--- a/cpp/lera/main/src/bcp/bcp.cpp
++++ b/cpp/lera/main/src/bcp/bcp.cpp
+@@ -5,6 +5,8 @@
+ //
+ 
+ #include "bcp/bcp.h"
++#include "bcp/branch_trace.h"
++#include "bcp/ordered_valuation.h"
+ 
+ #include <climits>
+ 
+@@ -288,7 +290,7 @@ void BCP::BranchNode(Node* node)
+ 	
+ 	// Calculate z[x_ij] values.
+ 	Matrix<double> x(D.NbVertices(), D.NbVertices(), 0.0);
+-	for (auto& y_val: node->opt)
++	for (const auto& y_val: ordered_valuation(node->opt))
+ 	{
+ 		auto& r = spf->RouteOf(y_val.first);
+ 		for (int k = 1; k < (int)r.path.size()-2; ++k) x[r.path[k]][r.path[k+1]] += y_val.second;
+@@ -302,9 +304,33 @@ void BCP::BranchNode(Node* node)
+ 			x_most.push_back(e);
+ 	sort(x_most.begin(), x_most.end(), [&] (Arc e, Arc f) { return fabs(0.5-x[e.tail][e.head]) < fabs(0.5-x[f.tail][f.head]); });
+ 	while (x_most.size() > STRONG_BRANCH_SIZE) x_most.pop_back();
++
++    FirstBranchTrace branch_trace;
++    if (branch_trace)
++    {
++        Matrix<double> raw_x(D.NbVertices(), D.NbVertices(), 0.0);
++        for (const auto& y_val : node->opt)
++        {
++            const auto& route = spf->RouteOf(y_val.first);
++            for (int k = 1; k < (int) route.path.size() - 2; ++k)
++                raw_x[route.path[k]][route.path[k + 1]] += y_val.second;
++        }
++        vector<Arc> legacy_candidates;
++        for (Arc arc : D.Arcs())
++            if (epsilon_bigger(raw_x[arc.tail][arc.head], 0.0)
++                    && epsilon_smaller(raw_x[arc.tail][arc.head], 1.0))
++                legacy_candidates.push_back(arc);
++        sort(legacy_candidates.begin(), legacy_candidates.end(), [&](Arc a, Arc b) {
++            return fabs(0.5 - raw_x[a.tail][a.head]) < fabs(0.5 - raw_x[b.tail][b.head]);
++        });
++        while (legacy_candidates.size() > STRONG_BRANCH_SIZE) legacy_candidates.pop_back();
++        branch_trace.Begin(node->index, node->bound, x_most, x, legacy_candidates, raw_x, node->opt);
++    }
+ 	
+ 	// Calculate all candidate estimate bounds and keep the best one.
+ 	vector<Node> best_candidate;
++    int selected_tail = -1, selected_head = -1;
++    double selected_estimate = -INFTY;
+     int selected_infeasible = 0;
+     if (x_most.empty()) ++unbranched_fractional_count;
+ 	if (!x_most.empty())
+@@ -332,6 +358,9 @@ void BCP::BranchNode(Node* node)
+ 			if (min(left.bound, right.bound) > best_estimate)
+ 			{
+ 				best_estimate = min(left.bound, right.bound);
++                selected_tail = e.tail;
++                selected_head = e.head;
++                selected_estimate = best_estimate;
+ 				best_candidate = {};
+                 selected_infeasible = int(left.rmp_infeasible) + int(right.rmp_infeasible);
+ 				if (left.bound < INFTY) best_candidate.push_back(left);
+@@ -340,6 +369,7 @@ void BCP::BranchNode(Node* node)
+ 		}
+ 	}
+ 	
++    branch_trace.Finish(selected_tail, selected_head, selected_estimate);
+     if (log.status == BCStatus::DidNotStart) selected_rmp_infeasible_count += selected_infeasible;
+ 	*log.branching_time += rolex_branch.Pause();
+ 	// Process new children to the queue.
+@@ -374,7 +404,7 @@ bool BCP::SeparateCuts(const Valuation& z)
+ 	// Parse basis variables.
+ 	vector<VertexSet> z_visited; // z_visited[i] = vertices visited by basis variable i.
+ 	vector<double> z_values; // z_values[i] = value of basis variable i.
+-	for (auto& y_val: z)
++	for (const auto& y_val: ordered_valuation(z))
+ 	{
+ 		auto route = spf->RouteOf(y_val.first);
+ 		z_visited.push_back(create_bitset<MAX_N>(route.path));
+@@ -408,4 +438,4 @@ bool BCP::SeparateCuts(const Valuation& z)
+ 	if (epsilon_bigger(best_violation, 0.1)) spf->AddCut(best);
+ 	return epsilon_bigger(best_violation, 0.1);
+ }
+-} // namespace
+\ No newline at end of file
++} // namespace
+diff --git a/cpp/lera/main/src/labeling/bidirectional_labeling.cpp b/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
+index 3170e81..3dd9d46 100644
+--- a/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
+@@ -280,6 +280,37 @@ BLBExecutionLog BidirectionalLabeling::Run(
+ 	lbl_[0].sort_by_cost = lbl_[1].sort_by_cost = sort_by_cost;
+ 	lbl_[0].unreachable_strengthened = lbl_[1].unreachable_strengthened = unreachable_strengthened;
+ 	lbl_[0].correcting = lbl_[1].correcting = correcting;
++
++#ifdef KAYROS_EXTENSION_PROFILING
++	const size_t profile_initial_routes = R->size();
++	if (extension_profile_.Enabled())
++	{
++		for (int d: {0, 1}) {
++			lbl_[d].extension_profile_ = &extension_profile_;
++			lbl_[d].extension_profile_direction_ = d;
++		}
++		static constexpr const char* level_names[] = {
++			"HeuristicCost", "HeuristicElementarity", "HeuristicNG", "Exact"
++		};
++		nlohmann::json direction_flags = nlohmann::json::array();
++		for (int d: {0, 1}) direction_flags.push_back({
++			{"cross", lbl_[d].cross}, {"process_limit", lbl_[d].process_limit},
++			{"ng_routes_relaxation", lbl_[d].ng_routes_relaxation}, {"t_m", lbl_[d].t_m}
++		});
++		extension_profile_.Begin({
++			{"level", level_names[static_cast<int>(level)]}, {"pricing_problem", pp_},
++			{"closing_state", closing_state}, {"merge_start", merge_start},
++			{"partial", partial}, {"limited_extension", limited_extension},
++			{"lazy_extension", lazy_extension}, {"unreachable_strengthened", unreachable_strengthened},
++			{"sort_by_cost", sort_by_cost}, {"correcting", correcting}, {"symmetric", symmetric},
++			{"elementary_check_relaxation", elementary_check_relaxation},
++			{"cost_check_relaxation", cost_check_relaxation},
++			{"step_exact_arithmetic", goc::step_exact_arithmetic()}, {"step_pool", step_pool_},
++			{"solution_limit", solution_limit}, {"time_limit_seconds", time_limit.Amount(DurationUnit::Seconds)},
++			{"directions", direction_flags}
++		});
++	}
++#endif
+ 	
+ 	BLBExecutionLog log(true);
+ 	Stopwatch rolex(false), merge_rolex(false);
+@@ -320,6 +351,9 @@ BLBExecutionLog BidirectionalLabeling::Run(
+ 			if (MemoryMonitor::Exceeded()) { log.status = BLBStatus::MemoryLimitReached; break; }
+ 			lbl_[d].time_limit = time_limit - rolex.Peek(); // Set time limit.
+ 			auto P = lbl_[d].Run(&q[d], mlb_log[d]);
++#ifdef KAYROS_EXTENSION_PROFILING
++			if (extension_profile_.Enabled()) extension_profile_.MaybeProgress();
++#endif
+ 			
+ 			// If iterative-merge is enabled, then add the labels to the structure.
+ 			if (!closing_state)
+@@ -411,6 +445,9 @@ BLBExecutionLog BidirectionalLabeling::Run(
+ 		}
+ 	}
+ 	
++#ifdef KAYROS_EXTENSION_PROFILING
++	if (extension_profile_.Enabled()) extension_profile_.End(log.ToJSON(), R->size() - profile_initial_routes, pool_size());
++#endif
+ 	return log;
+ }
+ 
+@@ -621,4 +658,4 @@ void BidirectionalLabeling::setup_labeling_level_flag(
+             break;
+     }
+ }
+-} // namespace
+\ No newline at end of file
++} // namespace
+diff --git a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+index 8dddf33..e01bb56 100644
+--- a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+@@ -66,8 +66,15 @@ static bool has_vertical(const PWLFunction& f)
+ 	return false;
+ }
+ 
+-PWLFunction normalize_pwl(const PWLFunction& f)
++PWLFunction normalize_pwl(const PWLFunction& f
++#ifdef KAYROS_EXTENSION_PROFILING
++	, bool* rebuilt = nullptr
++#endif
++)
+ {
++#ifdef KAYROS_EXTENSION_PROFILING
++	if (rebuilt) *rebuilt = false;
++#endif
+ 	// Fast path: boundaries already monotone (the norm) — return untouched so
+ 	// well-formed instances keep bit-identical label arithmetic.
+ 	bool ok = true;
+@@ -79,6 +86,9 @@ PWLFunction normalize_pwl(const PWLFunction& f)
+ 		hi = d.right;
+ 	}
+ 	if (ok) return f;
++#ifdef KAYROS_EXTENSION_PROFILING
++	if (rebuilt) *rebuilt = true;
++#endif
+ 	PWLFunction g;
+ 	hi = -INFTY;
+ 	for (int k = 0; k < f.PieceCount(); ++k)
+@@ -264,11 +274,19 @@ LazyLabel MonodirectionalLabeling::Init() const
+ 
+ Label* MonodirectionalLabeling::ExtensionStep(const LazyLabel& ll) const
+ {
++#ifdef KAYROS_EXTENSION_PROFILING
++	using Profile = ExtensionProfile;
++	Profile::Episode episode(extension_profile_, extension_profile_direction_);
++#endif
+ 	if (correcting && ll.parent->duration.Empty())
+ 	{
+ 		if (trace::on() && trace::prefix_len(ll.parent) > 0)
+ 			fprintf(stderr, "TRC EXT-FAIL path=%s+%d reason=parent-duration-empty(correcting)\n",
+ 				trace::path_str(ll.parent).c_str(), ll.v);
++#ifdef KAYROS_EXTENSION_PROFILING
++		episode.Mark(Profile::Event::ParentEmpty);
++		episode.Finish();
++#endif
+ 		return nullptr;
+ 	}
+ 	auto& l = ll.parent;
+@@ -282,6 +300,10 @@ Label* MonodirectionalLabeling::ExtensionStep(const LazyLabel& ll) const
+ 			&& trace::target()[trace::prefix_len(l)] == v)
+ 			fprintf(stderr, "TRC EXT-FAIL path=%s+%d reason=arrival-INFTY(correcting) rw_left=%.3f\n",
+ 				trace::path_str(l).c_str(), v, l->rw.left);
++#ifdef KAYROS_EXTENSION_PROFILING
++		episode.Mark(Profile::Event::ArrivalInfinite);
++		episode.Finish();
++#endif
+ 		return nullptr;
+ 	}
+ 	
+@@ -297,10 +319,17 @@ Label* MonodirectionalLabeling::ExtensionStep(const LazyLabel& ll) const
+ 		if (epsilon_smaller(tau_u0v, vrp_.tw[v].left - l->rw.right))
+ 		{
+ 			if (tr) fprintf(stderr, "TRC EXT-FAIL path=%s+%d reason=depot-triangle\n", trace::path_str(l).c_str(), v);
++#ifdef KAYROS_EXTENSION_PROFILING
++			episode.Mark(Profile::Event::DepotTriangle);
++			episode.Finish();
++#endif
+ 			return nullptr;
+ 		}
+ 	}
+ 	
++#ifdef KAYROS_EXTENSION_PROFILING
++	episode.Switch(Profile::Stage::AllocationResources);
++#endif
+ 	auto lv = new Label();
+ 	lv->parent = l;
+ 	lv->v = v;
+@@ -336,6 +365,14 @@ Label* MonodirectionalLabeling::ExtensionStep(const LazyLabel& ll) const
+ 	// strictly above checker-valid solutions (Vu2020 n=59 Vu-A5-pA-d90-w40,
+ 	// 2764.380 against the true 2760.110). Jump-free solves keep the legacy
+ 	// composite; step-carrying solves keep M13.0 unchanged.
++#ifdef KAYROS_EXTENSION_PROFILING
++	episode.Switch(Profile::Stage::ArithmeticGate);
++	if (episode.Sampled()) {
++		episode.Observe(Profile::Pieces::Parent, l->duration.PieceCount());
++		episode.Observe(Profile::Pieces::Travel, vrp_.tau[u][v].PieceCount());
++		episode.Observe(Profile::Pieces::Departure, vrp_.dep[u][v].PieceCount());
++	}
++#endif
+ 	const bool step_arc = goc::step_exact_arithmetic()
+ 		&& (has_vertical(vrp_.dep[u][v]) || has_vertical(vrp_.tau[u][v])
+ 			|| has_vertical(l->duration));
+@@ -345,33 +382,90 @@ Label* MonodirectionalLabeling::ExtensionStep(const LazyLabel& ll) const
+ 		// last ready time plus the forced wait. MinValueAt on the step path
+ 		// (durations are set-valued at choice abscissae, min semantics, 21/n);
+ 		// Value on the legacy path for bit-identity.
++#ifdef KAYROS_EXTENSION_PROFILING
++		episode.Mark(Profile::Event::BeforeWindow);
++		episode.Switch(Profile::Stage::BeforeWindow);
++#endif
+ 		double d_at = step_arc ? l->duration.MinValueAt(max(l->rw)) : l->duration(max(l->rw));
+ 		lv->duration = PWLFunction::ConstantFunction(d_at + min(vrp_.tw[v]) - max(l->rw), {min(vrp_.tw[v]), min(vrp_.tw[v])});
+ 	}
+ 	else if (step_arc)
+ 	{
++#ifdef KAYROS_EXTENSION_PROFILING
++		episode.Mark(Profile::Event::StepArc);
++		episode.Switch(Profile::Stage::Subtraction);
++		PWLFunction comp = episode.ThenCompose(l->duration - PWLFunction::IdentityFunction(l->duration.Domain())).Compose(vrp_.dep[u][v]);
++		if (episode.Sampled()) episode.Observe(Profile::Pieces::Composed, comp.PieceCount());
++		episode.Switch(Profile::Stage::Addition);
++		lv->duration = comp.Empty() ? comp : comp + PWLFunction::IdentityFunction(comp.Domain());
++#else
+ 		PWLFunction comp = (l->duration - PWLFunction::IdentityFunction(l->duration.Domain())).Compose(vrp_.dep[u][v]);
+ 		lv->duration = comp.Empty() ? comp : comp + PWLFunction::IdentityFunction(comp.Domain());
++#endif
+ 	}
+ 	else
++#ifdef KAYROS_EXTENSION_PROFILING
++	{
++		episode.Mark(Profile::Event::LegacyArc);
++		episode.Switch(Profile::Stage::Addition);
++		lv->duration = episode.ThenCompose(l->duration + vrp_.tau[u][v]).Compose(vrp_.dep[u][v]);
++		if (episode.Sampled()) episode.Observe(Profile::Pieces::Composed, lv->duration.PieceCount());
++	}
++#else
+ 		lv->duration = (l->duration + vrp_.tau[u][v]).Compose(vrp_.dep[u][v]);
++#endif
++#ifdef KAYROS_EXTENSION_PROFILING
++	episode.Switch(Profile::Stage::Restriction);
++#endif
+ 	if (limited_extension && !cross) lv->duration.RestrictDomain({0.0, t_m});
++#ifdef KAYROS_EXTENSION_PROFILING
++	episode.Switch(Profile::Stage::Normalization);
++	bool normalization_rebuilt = false;
++	lv->duration = normalize_pwl(lv->duration, &normalization_rebuilt);
++	episode.Mark(normalization_rebuilt ? Profile::Event::NormalizeRebuilt : Profile::Event::NormalizeFast);
++	if (episode.Sampled()) episode.Observe(Profile::Pieces::Normalized, lv->duration.PieceCount());
++	episode.Switch(Profile::Stage::Feasibility);
++#else
+ 	lv->duration = normalize_pwl(lv->duration); // kayros (M5.7): heal epsilon-dust piece misorder.
++#endif
+ 	if (lv->duration.Empty())
+ 	{
+ 		if (tr) fprintf(stderr, "TRC EXT-FAIL path=%s+%d reason=empty-duration\n", trace::path_str(l).c_str(), v);
+-		delete lv; return nullptr; // If no duration pieces exist, then the label is dominated.
++		delete lv;
++#ifdef KAYROS_EXTENSION_PROFILING
++		episode.Mark(Profile::Event::DurationEmpty);
++		episode.Finish();
++#endif
++		return nullptr; // If no duration pieces exist, then the label is dominated.
+ 	}
+ 	lv->rw = dom(lv->duration);
+ 	
++#ifdef KAYROS_EXTENSION_PROFILING
++	episode.Switch(Profile::Stage::VisitedSet);
++#endif
+ 	if (ng_routes_relaxation && ng.has_value())
+ 	{
++#ifdef KAYROS_EXTENSION_PROFILING
++		episode.Mark(Profile::Event::NgVisited);
++#endif
+ 		const VertexSet& ng_v = ng->neighbors(v, lv->rw.left);
+ 		lv->S = unite(intersection(l->S, ng_v), {v}); // S := (S(parent) ∩ N(v, t)) ∪ {v}
+ 	}
+ 	else
++#ifdef KAYROS_EXTENSION_PROFILING
++	{
++		episode.Mark(Profile::Event::FullVisited);
++		lv->S = unite(l->S, {v}); // Full elementary route (no NG-relaxation)
++	}
++	episode.Mark(unreachable_strengthened ? Profile::Event::StrongUnreachable : Profile::Event::WeakUnreachable);
++	lv->U = unite(lv->S, episode.Measure(Profile::Stage::Unreachable, [&] {
++		return unreachable_strengthened ? vrp_.Unreachable(v, lv->rw.left) : vrp_.WeakUnreachable(v, lv->rw.left);
++	}));
++	episode.Switch(Profile::Stage::CutResources);
++#else
+ 		lv->S = unite(l->S, {v}); // Full elementary route (no NG-relaxation)
+ 	lv->U = unite(lv->S, unreachable_strengthened ? vrp_.Unreachable(v, lv->rw.left) : vrp_.WeakUnreachable(v, lv->rw.left));
++#endif
+ 	
+ 	// Extend cut resources.
+ 	lv->cut_cost = l->cut_cost;
+@@ -388,6 +482,9 @@ Label* MonodirectionalLabeling::ExtensionStep(const LazyLabel& ll) const
+ 			lv->cut_nz.push_back(i); // Add to cut_nz cuts with exactly 1 visited vertex of the cut.
+ 		}
+ 	}
++#ifdef KAYROS_EXTENSION_PROFILING
++	episode.Switch(Profile::Stage::Finalize);
++#endif
+ 	lv->min_cost = min(img(lv->duration)) - lv->p - lv->cut_cost;
+ 	if (tr) fprintf(stderr, "TRC EXT path=%s rw=[%.3f,%.3f] dur_img=[%.3f,%.3f] min_cost=%.6f q=%.1f\n",
+ 		trace::path_str(lv).c_str(), lv->rw.left, lv->rw.right,
+@@ -411,6 +508,10 @@ Label* MonodirectionalLabeling::ExtensionStep(const LazyLabel& ll) const
+ 		dump("EXT-PARENT", l);
+ 		dump("EXT-DUMP", lv);
+ 	}
++#ifdef KAYROS_EXTENSION_PROFILING
++	episode.Mark(Profile::Event::ReturnedLabel);
++	episode.Finish();
++#endif
+ 	return lv;
+ }
+ 
+@@ -554,4 +655,4 @@ void MonodirectionalLabeling::Clean()
+ 				delete m;
+ 	U = vector<DemandLevel>(vrp_.D.NbVertices());
+ }
+-} // solver
+\ No newline at end of file
++} // solver
+diff --git a/docs/ms58-extension-profile.md b/docs/ms58-extension-profile.md
+new file mode 100644
+index 0000000..b35c35c
+--- /dev/null
++++ b/docs/ms58-extension-profile.md
+@@ -0,0 +1,48 @@
++# Experimental extension profiling
++
++This diagnostic derivative starts from integrated Kayros `327e481713e1b9a3187fda2fc9f10f8d9d75b0c5`. It preserves the canonical valuation changes, scalar-point CHOICE repair, arithmetic gates, feasibility predicates, cut updates and normalization. No solver experiment has been launched from this worktree. We use the diagnostic to identify where extension spends time before proposing another optimization.
++
++The CMake option `KAYROS_EXTENSION_PROFILING` defaults to `OFF`. When disabled, both labeling translation units have the same preprocessed content as the base after whitespace removal. When enabled, the definition is public on the `lera` target so its bridge sees the same class layouts. It does not reach the independent `_core` target or its ILS implementation. All profile counters, timers and file ownership belong to one `BidirectionalLabeling` object. No mutable global or thread-local profile state is introduced.
++
++## Activation and identity
++
++Build a fresh CPLEX diagnostic variant with `-DKAYROS_EXTENSION_PROFILING=ON` in addition to the existing CMake settings. The runtime variable `KAYROS_EXTENSION_PROFILE` must name a new JSONL file. Creation is exclusive, so a second solve must use a different path. Missing runtime opt-in leaves the diagnostic inactive. The compiled diagnostic variant must still be kept separate from timing builds, even when the runtime variable is unset.
++
++The optional variables `KAYROS_EXTENSION_PROFILE_STRIDE` and `KAYROS_EXTENSION_PROFILE_OFFSET` select deterministic samples. Their defaults are `1009` and `0`. Each direction samples zero-based extension attempts whose ordinal modulo stride equals offset, resetting at each pricing task. Invalid settings fail before opening the output. The opening record identifies schema `kayros-ms58-extension-profile-v1`, the base source, sample rule and clock. The run manifest must additionally retain the complete derivative commit, patch, binary, input and harness hashes.
++
++Every task writes a flushed `pricing_begin` containing the complete pricing problem and effective labeling flags. It then writes cumulative `pricing_progress` records at most once per 5 seconds, checked after sampled extensions and monodirectional batches. A single long operation can delay a progress record. Normal return writes `pricing_end` with the unchanged native log, returned-route count and pool size. `pricing_returned=true` means only that the pricing method returned. The native log distinguishes time limits, memory limits, solution limits and finished pricing. A begin without an end remains unfinished, including after exceptions or process termination. No record asserts solver closure or proof validity.
++
++## Measurements
++
++Every extension attempt contributes counters, including attempts that return no label. Each direction records rejection reasons, the before-window/legacy/step branches, normalization fast returns and rebuilds, NG/full visited sets, strong/weak unreachable updates and returned labels. These counters cover only `ExtensionStep`, so normalization performed by dominance or correction is outside this profile.
++
++Sampled attempts partition extension wall time across feasibility checks, label allocation and scalar resources, arithmetic gating, before-window evaluation, PWL addition, PWL subtraction, PWL composition, domain restriction, normalization, visited sets, unreachable calculation, cut resources and final scalar/trace work. The unreachable stage excludes the surrounding set union. Nested stage timers are exclusive. A stage's entry count includes resumption after nested work and must not be read as an operator invocation count. The step path's final addition stage also includes its existing empty-result check and copy branch. The domain-restriction call remains exactly as implemented, including its discarded return value.
++
++The addition/subtraction result is passed by forwarding reference into `Compose`. This retains the original full expression, arithmetic order and temporary lifetime. No PWL operators, CHOICE/JUMP semantics or normalizer rules are changed. Sampled piece statistics report count, sum and maximum for parent duration, arc travel, arc departure, the precomposition arithmetic result, the composed result and the normalized duration. They use `PieceCount()` and do not rescan function pieces.
++
++The stage times include clock and bookkeeping overhead. The rare JSON write happens after the sampled episode timer stops, but it remains inside the native extension timer when triggered from an extension. Sampling can correlate with search order, so an offset repeat is useful if a proposed mechanism depends on a narrow class of labels. These are diagnostic wall-time samples, without extrapolated CPU attribution or a solver throughput claim. Compare ordered route pools and native work counts against the uninstrumented base before interpreting stage proportions. Sample size and piece statistics must accompany those proportions.
++
++## Validation and next runs
++
++The standalone fixture `tests/cpp/test_extension_profile.cpp` passes sampling, direction separation, task reset, exclusive stage accounting, nested-call evaluation counts, original temporary lifetime, unchanged native status, unfinished-task handling, exclusive output creation and invalid-setting checks. It does not invoke the solver or an LP backend. The compile-on labeling source also passes a C++23 syntax check in the project development shell.
++
++The native fixture `tests/cpp/test_extension_profile_pwl.cpp` supplies 384 bitwise comparisons of the original and wrapped PWL expressions across both arithmetic modes, full and point domains, stacked CHOICE and JUMP pieces, sampled and unsampled attempts. Compile and execute it against the newly built diagnostic `liblera.a` on reserved compute before the first solver run. Its execution is pending. A matching expression fixture does not establish full solver trajectory equivalence.
++
++```bash
++g++ -std=c++23 -O2 -DNDEBUG -ffp-contract=off \
++  -DKAYROS_EXTENSION_PROFILING=1 \
++  -Icpp/lera/main/include -Icpp/lera/goc/include \
++  tests/cpp/test_extension_profile.cpp \
++  -o build/ms58/test_extension_profile
++build/ms58/test_extension_profile
++
++g++ -std=c++23 -O2 -DNDEBUG -ffp-contract=off \
++  -DKAYROS_EXTENSION_PROFILING=1 \
++  -Icpp/lera/main/include -Icpp/lera/goc/include \
++  tests/cpp/test_extension_profile_pwl.cpp \
++  build/cplex/cpp/lera/liblera.a -ldl -lm \
++  -o build/ms58/test_extension_profile_pwl
++build/ms58/test_extension_profile_pwl
++```
++
++All new comparative solver pilots must use Dabia2013 instances with 25, 50 or 100 customers and CPLEX, and include minimally corrected Lera `f2c9e20`. The direct diagnostic control is uninstrumented best `327e481`. Start with the C104 workload that motivated the profile, retain unfinished records and compare completed-task work signatures before interpreting cost by stage. Any promotion or speed measurement belongs in a separate build with profiling disabled. This patch does not combine with the dominance-scratch candidate.
+diff --git a/tests/cpp/test_extension_profile.cpp b/tests/cpp/test_extension_profile.cpp
+new file mode 100644
+index 0000000..6b47b9b
+--- /dev/null
++++ b/tests/cpp/test_extension_profile.cpp
+@@ -0,0 +1,135 @@
++#include "labeling/extension_profile.h"
++
++#include <filesystem>
++#include <fstream>
++#include <iostream>
++#include <vector>
++
++using Profile = solver::ExtensionProfile;
++using Json = nlohmann::json;
++
++namespace {
++void require(bool condition, const char* message)
++{
++    if (!condition) throw std::runtime_error(message);
++}
++
++std::vector<Json> read(const std::filesystem::path& path)
++{
++    std::ifstream input(path);
++    std::vector<Json> result;
++    std::string line;
++    while (std::getline(input, line)) result.push_back(Json::parse(line));
++    return result;
++}
++
++// A noncopyable stand-in checks that ThenCompose forwards the same object
++// and retains the input temporary until assignment has finished.
++struct Temporary {
++    bool* alive;
++    explicit Temporary(bool& flag) : alive(&flag) { *alive = true; }
++    ~Temporary() { *alive = false; }
++    Temporary(const Temporary&) = delete;
++    Temporary(Temporary&&) = delete;
++    int PieceCount() const { return 3; }
++    const Temporary& Compose() const { return *this; }
++};
++struct Assignment {
++    Assignment& operator=(const Temporary& value)
++    {
++        require(*value.alive, "Input temporary died before assignment");
++        return *this;
++    }
++};
++}
++
++int main()
++{
++    char directory_template[] = "/tmp/ms58-extension-profile-XXXXXX";
++    const char* directory = mkdtemp(directory_template);
++    if (!directory) return 2;
++    const std::filesystem::path root(directory);
++    try {
++        unsetenv("KAYROS_EXTENSION_PROFILE");
++        Profile disabled;
++        require(!disabled.Enabled(), "Runtime opt-in must be required");
++        disabled.Begin({});
++        Profile::Episode ignored(nullptr, 0);
++        require(!ignored.Sampled(), "Disabled episodes must not sample");
++
++        setenv("KAYROS_EXTENSION_PROFILE_STRIDE", "3", 1);
++        setenv("KAYROS_EXTENSION_PROFILE_OFFSET", "1", 1);
++        const auto path = root / "profile.jsonl";
++        setenv("KAYROS_EXTENSION_PROFILE", path.c_str(), 1);
++        {
++            Profile profile;
++            require(profile.Enabled(), "Runtime profile did not open");
++            profile.Begin({{"fixture", "sampling"}});
++            for (int direction : {0, 1}) {
++                for (int i = 0; i < (direction == 0 ? 7 : 4); ++i) {
++                    Profile::Episode episode(&profile, direction);
++                    require(episode.Sampled() == (i % 3 == 1), "Sampling ordinal changed");
++                    episode.Switch(Profile::Stage::Addition);
++                    bool alive = false;
++                    Assignment output;
++                    output = episode.ThenCompose(Temporary(alive)).Compose();
++                    require(!alive, "Input temporary outlived the original full expression");
++                    int calls = 0;
++                    const int value = episode.Measure(Profile::Stage::Unreachable, [&] {
++                        ++calls;
++                        return episode.Measure(Profile::Stage::VisitedSet, [&] { return 17; });
++                    });
++                    require(value == 17 && calls == 1, "Nested profiling changed evaluation count");
++                    episode.Mark(Profile::Event::ReturnedLabel);
++                    episode.Finish();
++                    episode.Finish(); // Idempotent, no duplicated sample time.
++                }
++            }
++            profile.End({{"status", "TimeLimitReached"}}, 2, 3);
++            profile.Begin({{"fixture", "reset"}});
++            Profile::Episode episode(&profile, 0);
++            episode.Mark(Profile::Event::ParentEmpty);
++            episode.Finish();
++            profile.End({{"status", "SolutionLimitReached"}}, 0, 0);
++            profile.Begin({{"fixture", "interrupted"}});
++            // Deliberately omit End. Destruction must not imply completion.
++        }
++        const auto records = read(path);
++        require(records.size() == 6, "Unexpected profile record count");
++        const auto& finished = records.at(2);
++        require(finished.at("native_log").at("status") == "TimeLimitReached", "Native status was rewritten");
++        require(finished.at("forward").at("attempts") == 7, "Forward attempt count changed");
++        require(finished.at("backward").at("attempts") == 4, "Backward attempt count changed");
++        require(finished.at("forward").at("sampled_finished") == 2, "Forward sample count changed");
++        require(finished.at("backward").at("sampled_finished") == 1, "Backward sample count changed");
++        for (const char* direction : {"forward", "backward"}) {
++            uint64_t sum = 0;
++            for (const auto& stage : finished.at(direction).at("stages"))
++                sum += stage.at("sampled_ns").get<uint64_t>();
++            require(sum == finished.at(direction).at("sampled_total_ns").get<uint64_t>(),
++                    "Exclusive stages do not partition sampled elapsed time");
++            require(finished.at(direction).at("sampled_attempts") == finished.at(direction).at("sampled_finished"),
++                    "A normally returned sample was left unfinished");
++        }
++        require(records.at(4).at("forward").at("attempts") == 1, "Task counters did not reset");
++        require(records.at(4).at("forward").at("sampled_attempts") == 0, "Sampling phase did not reset");
++        require(records.back().at("event") == "pricing_begin" && !records.back().at("pricing_returned").get<bool>(),
++                "Interrupted task was silently completed");
++        bool rejected = false;
++        try { Profile collision; } catch (const std::runtime_error&) { rejected = true; }
++        require(rejected && read(path).size() == records.size(), "Existing profile was overwritten");
++        setenv("KAYROS_EXTENSION_PROFILE", (root / "invalid.jsonl").c_str(), 1);
++        setenv("KAYROS_EXTENSION_PROFILE_STRIDE", "0", 1);
++        rejected = false;
++        try { Profile invalid; } catch (const std::runtime_error&) { rejected = true; }
++        require(rejected, "Zero sampling stride was accepted");
++        require(!std::filesystem::exists(root / "invalid.jsonl"), "Invalid settings created a file");
++        std::filesystem::remove_all(root);
++        std::cout << "PASS sampling reset exclusive-timers temporary-lifetime unfinished-status exclusive-file invalid-settings\n";
++        return 0;
++    } catch (const std::exception& error) {
++        std::cerr << error.what() << '\n';
++        std::filesystem::remove_all(root);
++        return 1;
++    }
++}
+diff --git a/tests/cpp/test_extension_profile_pwl.cpp b/tests/cpp/test_extension_profile_pwl.cpp
+new file mode 100644
+index 0000000..9061262
+--- /dev/null
++++ b/tests/cpp/test_extension_profile_pwl.cpp
+@@ -0,0 +1,92 @@
++#include "labeling/extension_profile.h"
++#include "goc/math/pwl_function.h"
++
++#include <bit>
++#include <filesystem>
++#include <iostream>
++
++using Profile = solver::ExtensionProfile;
++using namespace goc;
++
++namespace {
++void require(bool condition, const char* message)
++{
++    if (!condition) throw std::runtime_error(message);
++}
++bool same(double left, double right)
++{
++    return std::bit_cast<uint64_t>(left) == std::bit_cast<uint64_t>(right);
++}
++void same_function(const PWLFunction& left, const PWLFunction& right)
++{
++    require(left.PieceCount() == right.PieceCount(), "Profile wrapper changed piece count");
++    require(same(left.Domain().left, right.Domain().left) && same(left.Domain().right, right.Domain().right), "Profile wrapper changed domain");
++    require(same(left.Image().left, right.Image().left) && same(left.Image().right, right.Image().right), "Profile wrapper changed image");
++    for (int i = 0; i < left.PieceCount(); ++i) {
++        const auto& a = left.Piece(i);
++        const auto& b = right.Piece(i);
++        require(same(a.domain.left, b.domain.left) && same(a.domain.right, b.domain.right)
++            && same(a.image.left, b.image.left) && same(a.image.right, b.image.right)
++            && same(a.slope, b.slope) && same(a.intercept, b.intercept), "Profile wrapper changed piece bits or vertical tags");
++    }
++}
++PWLFunction fixture(int variant)
++{
++    PWLFunction f;
++    f.AddPiece(LinearFunction({0.0, 8.0}, {1.0, 8.5}));
++    for (int i = 0; i < 1 + variant % 9; ++i) {
++        auto piece = LinearFunction({1.0, 8.5 - i * 0.125}, {1.0, 8.5 - (i + 1) * 0.125});
++        if (variant % 2) piece = piece.as_choice_vertical();
++        f.AddPiece(piece);
++    }
++    f.AddPiece(LinearFunction({1.0, 8.0}, {2.0, 9.0}));
++    return f;
++}
++}
++
++int main()
++{
++    char path_template[] = "/tmp/ms58-extension-pwl-XXXXXX";
++    const char* directory = mkdtemp(path_template);
++    if (!directory) return 2;
++    const std::filesystem::path root(directory);
++    try {
++        setenv("KAYROS_EXTENSION_PROFILE", (root / "fixture.jsonl").c_str(), 1);
++        setenv("KAYROS_EXTENSION_PROFILE_STRIDE", "3", 1);
++        setenv("KAYROS_EXTENSION_PROFILE_OFFSET", "0", 1);
++        Profile profile;
++        profile.Begin({{"fixture", "pwl_expression_equivalence"}});
++        int comparisons = 0;
++        for (bool exact : {false, true}) {
++            StepExactArithmeticScope arithmetic(exact);
++            for (int i = 0; i < 64; ++i) {
++                const auto f = fixture(i);
++                const auto travel = PWLFunction::ConstantFunction(19.0, i % 3 ? Interval{0.0, 2.0} : Interval{1.0, 1.0});
++                const auto departure = i % 3 ? PWLFunction::IdentityFunction({0.0, 2.0}) : PWLFunction::ConstantFunction(1.0, {20.0, 20.0});
++                Profile::Episode episode(&profile, i % 2);
++                const auto expected = (f + travel).Compose(departure);
++                episode.Switch(Profile::Stage::Addition);
++                const auto observed = episode.ThenCompose(f + travel).Compose(departure);
++                same_function(expected, observed);
++                const auto expected_comp = (f - PWLFunction::IdentityFunction(f.Domain())).Compose(departure);
++                episode.Switch(Profile::Stage::Subtraction);
++                const auto observed_comp = episode.ThenCompose(f - PWLFunction::IdentityFunction(f.Domain())).Compose(departure);
++                same_function(expected_comp, observed_comp);
++                const auto expected_step = expected_comp.Empty() ? expected_comp : expected_comp + PWLFunction::IdentityFunction(expected_comp.Domain());
++                episode.Switch(Profile::Stage::Addition);
++                const auto observed_step = observed_comp.Empty() ? observed_comp : observed_comp + PWLFunction::IdentityFunction(observed_comp.Domain());
++                same_function(expected_step, observed_step);
++                episode.Finish();
++                comparisons += 3;
++            }
++        }
++        profile.End({{"status", "fixture_only"}}, 0, 0);
++        std::filesystem::remove_all(root);
++        std::cout << "PASS bitwise PWL expression comparisons=" << comparisons << '\n';
++        return 0;
++    } catch (const std::exception& error) {
++        std::filesystem::remove_all(root);
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++}
+diff --git a/tests/cpp/test_ordered_valuation.cpp b/tests/cpp/test_ordered_valuation.cpp
+new file mode 100644
+index 0000000..6b15f9e
+--- /dev/null
++++ b/tests/cpp/test_ordered_valuation.cpp
+@@ -0,0 +1,65 @@
++#include <algorithm>
++#include <array>
++#include <bit>
++#include <cstdint>
++#include <cstdlib>
++#include <iostream>
++#include <numeric>
++#include <random>
++#include <set>
++
++#include "bcp/ordered_valuation.h"
++#include "goc/linear_programming/highs/matrix_formulation.h"
++
++static void require(bool value)
++{
++    if (!value) { std::cerr << "ordered valuation regression\n"; std::exit(1); }
++}
++
++int main()
++{
++    // Fractional values from the captured C201 root LP, including its dust.
++    const std::array<double, 23> values{
++        .05, .05, .05, .05, .05, .05, .05, .05, .05, .05,
++        .05000000000000007, .05, .05, .05, .049999999999999795,
++        .05, .050000000000000114, .05, .05, .049999999999999906,
++        .049999999999999836, 1., 1.};
++    std::mt19937 rng(58);
++    std::set<uint64_t> raw_results;
++    std::array<uint64_t, 3> expected{};
++    for (int trial = 0; trial < 128; ++trial)
++    {
++        goc::MatrixFormulation formulation;
++        std::vector<goc::Variable> variables;
++        for (int index = 0; index < (int) values.size(); ++index)
++            variables.push_back(formulation.AddVariable("y_" + std::to_string(index)));
++        std::vector<int> order(values.size());
++        std::iota(order.begin(), order.end(), 0);
++        std::shuffle(order.begin(), order.end(), rng);
++        goc::Valuation valuation;
++        for (int index : order) valuation.SetValue(variables[index], values[index]);
++        double raw = 0.;
++        for (const auto& item : valuation) raw += item.second;
++        raw_results.insert(std::bit_cast<uint64_t>(raw));
++        auto sorted = solver::ordered_valuation(valuation);
++        require(sorted.size() == values.size());
++        std::array<double, 3> sums{};
++        for (int index = 0; index < (int) sorted.size(); ++index)
++        {
++            require(sorted[index].first.Index() == index);
++            require(std::bit_cast<uint64_t>(sorted[index].second) == std::bit_cast<uint64_t>(values[index]));
++            sums[0] += sorted[index].second;
++            if (index % 3) sums[1] += sorted[index].second;
++            if (index % 2) sums[2] += sorted[index].second;
++        }
++        for (int index = 0; index < 3; ++index)
++        {
++            uint64_t bits = std::bit_cast<uint64_t>(sums[index]);
++            if (trial == 0) expected[index] = bits;
++            else require(bits == expected[index]);
++        }
++    }
++    require(raw_results.size() > 1);
++    std::cout << "PASS 128 valuation permutations, invariant canonical reductions, "
++              << raw_results.size() << " distinct raw sum bit patterns\n";
++}
+diff --git a/tests/cpp/test_point_addition.cpp b/tests/cpp/test_point_addition.cpp
+new file mode 100644
+index 0000000..545ed1e
+--- /dev/null
++++ b/tests/cpp/test_point_addition.cpp
+@@ -0,0 +1,84 @@
++#include "goc/math/pwl_function.h"
++
++#include <cmath>
++#include <iostream>
++#include <stdexcept>
++
++namespace {
++void require(bool condition, const char* message)
++{
++    if (!condition) throw std::runtime_error(message);
++}
++
++goc::PWLFunction choices()
++{
++    goc::PWLFunction f;
++    f.AddPiece(goc::LinearFunction({770.0, 62.6125}, {770.0, 50.425}).as_choice_vertical());
++    f.AddPiece(goc::LinearFunction({770.0, 50.425}, {770.0, 50.0}).as_choice_vertical());
++    f.AddPiece(goc::LinearFunction({770.0, 50.0}, {770.0, 41.0272189349112}).as_choice_vertical());
++    f.AddPiece(goc::LinearFunction({770.0, 41.0272189349112}, {771.0, 41.1195266272189}));
++    return f;
++}
++
++void check(bool step_exact)
++{
++    goc::StepExactArithmeticScope scope(step_exact);
++    const auto f = choices();
++    const auto travel = goc::PWLFunction::ConstantFunction(19.0, {770.0, 770.0});
++    const auto departure = goc::PWLFunction::ConstantFunction(770.0, {789.0, 789.0});
++    const double expected = f.MinValueAt(770.0) + 19.0;
++    for (const auto& sum : {f + travel, travel + f})
++    {
++        require(sum.Domain().left == 770.0 && sum.Domain().right == 770.0,
++                "A scalar point must restrict the sum to its abscissa");
++        require(std::abs(sum.MinValueAt(770.0) - expected) < 1e-10,
++                "Adding a scalar point lost an attainable departure choice");
++        const auto extended = sum.Compose(departure);
++        require(std::abs(extended.MinValueAt(789.0) - expected) < 1e-10,
++                "Tight-arc extension must retain the best prefix duration");
++    }
++    const auto outside = goc::PWLFunction::ConstantFunction(19.0, {772.0, 772.0});
++    require((f + outside).Empty() && (outside + f).Empty(),
++            "A disjoint point must not create a new feasible time");
++    const auto ordinary = goc::PWLFunction::ConstantFunction(2.0, {0.0, 4.0});
++    const auto point = goc::PWLFunction::ConstantFunction(3.0, {4.0, 4.0});
++    require((ordinary + point).MinValueAt(4.0) == 5.0,
++            "Ordinary scalar-point addition must remain unchanged");
++
++    goc::PWLFunction boundary;
++    boundary.AddPiece(goc::LinearFunction({760.0, 43.0}, {770.0, 43.0}));
++    boundary.AddPiece(goc::LinearFunction({770.0, 43.0}, {770.0, 41.0}).as_choice_vertical());
++    for (const auto& sum : {boundary + travel, travel + boundary})
++        require(sum.MinValueAt(770.0) == 60.0,
++                "An ordinary segment followed by a boundary choice must retain the choice");
++
++    goc::PWLFunction jump;
++    jump.AddPiece(goc::LinearFunction({0.0, 2.0}, {1.0, 2.0}));
++    jump.AddPiece(goc::LinearFunction({1.0, 2.0}, {1.0, 8.0}));
++    jump.AddPiece(goc::LinearFunction({1.0, 8.0}, {2.0, 8.0}));
++    const auto at_jump = goc::PWLFunction::ConstantFunction(3.0, {1.0, 1.0});
++    for (const auto& sum : {jump + at_jump, at_jump + jump})
++    {
++        require(sum.PieceCount() == 2 && sum.Piece(1).is_jump_vertical(),
++                "The point-choice repair must leave the unrelated JUMP sweep unchanged");
++        require(sum.Value(1.0) == 5.0,
++                "The attained side of an unrelated JUMP must remain unchanged");
++    }
++}
++}
++
++int main()
++{
++    try
++    {
++        check(false);
++        check(true);
++        std::cout << "Point-addition and tight-extension invariants pass in legacy and step-exact modes\n";
++        return 0;
++    }
++    catch (const std::exception& error)
++    {
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++}

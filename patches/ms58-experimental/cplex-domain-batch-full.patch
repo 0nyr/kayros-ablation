@@ -1,0 +1,916 @@
+diff --git a/cpp/lera/CMakeLists.txt b/cpp/lera/CMakeLists.txt
+index 53f18f9..df54840 100644
+--- a/cpp/lera/CMakeLists.txt
++++ b/cpp/lera/CMakeLists.txt
+@@ -108,3 +108,10 @@ target_compile_options(_lera PRIVATE -ffp-contract=off)
+ target_link_libraries(_lera PRIVATE lera)
+ 
+ install(TARGETS _lera DESTINATION kayros)
++
++if(LERA_LP_BACKEND STREQUAL "cplex")
++    add_executable(ms58_cplex_domain_fixture EXCLUDE_FROM_ALL
++        ${CMAKE_CURRENT_SOURCE_DIR}/../../tests/cpp/test_cplex_variable_domains.cpp)
++    target_compile_options(ms58_cplex_domain_fixture PRIVATE -ffp-contract=off)
++    target_link_libraries(ms58_cplex_domain_fixture PRIVATE lera)
++endif()
+diff --git a/cpp/lera/goc/include/goc/math/pwl_function.h b/cpp/lera/goc/include/goc/math/pwl_function.h
+index 914d6d5..92eece0 100644
+--- a/cpp/lera/goc/include/goc/math/pwl_function.h
++++ b/cpp/lera/goc/include/goc/math/pwl_function.h
+@@ -26,16 +26,20 @@ namespace goc
+ //           hold an operand back for any stacked boundary piece. These rules
+ //           are what the exact value-jump labeling needs on step-carrying
+ //           (stepwise-ATF) instances.
+-//   false = the pre-M13.0 (kayros 1.0.0) rules, which preserve only JUMP
++//   false = the pre-M13.0 (kayros 1.0.0) rules with the scalar-point addition
++//           repair, which preserve only JUMP
+ //           verticals in Compose, pair operator+ verticals by image order, and
+ //           hold back only for a boundary vertical after a non-vertical piece.
++//           Addition also retains a single nonvertical point operand across
++//           stacked CHOICE pieces at exactly the same abscissa.
+ //
+ // Why the switch exists: CHOICE verticals (from Inverse of a departure
+ // plateau) and set-valued label durations occur on JUMP-FREE instances too, so
+ // the M13.0 rules were never confined to the exact path the way M13.0 assumed.
+ // On jump-free instances they change the audited v1.0.0 arithmetic and
+-// over-certify (M13.3). The flag restores the documented intent: jump-free
+-// solves take the v1.0.0 arithmetic bit-identically.
++// over-certify (M13.3). The flag retains the legacy arithmetic on jump-free
++// solves, except for the scalar-point addition repair needed to preserve all
++// attainable departure choices on a tight connection.
+ //
+ // Process-global, defaulting to the M13.0 rules (the library semantics the goc
+ // unit tests pin). `kayros::lera::solve_duration_json` sets it per solve from
+diff --git a/cpp/lera/goc/src/linear_programming/cplex/cplex_solver.cpp b/cpp/lera/goc/src/linear_programming/cplex/cplex_solver.cpp
+index dfaed5e..8f890f6 100644
+--- a/cpp/lera/goc/src/linear_programming/cplex/cplex_solver.cpp
++++ b/cpp/lera/goc/src/linear_programming/cplex/cplex_solver.cpp
+@@ -16,6 +16,7 @@
+ #include "goc/linear_programming/cplex/cplex_solver.h"
+ #include "goc/linear_programming/cplex/cplex_wrapper.h"
+ #include "goc/linear_programming/cplex/cplex_formulation.h"
++#include "cplex_variable_domains.h"
+ 
+ using namespace std;
+ using namespace nlohmann;
+@@ -482,9 +483,7 @@ LPExecutionLog solve_lp(CplexFormulation* formulation, ostream* screen_output, D
+ 	
+ 	// Change problem to LP, but before save the domain of variables, because changing the problem type to LP erases
+ 	// them.
+-	vector<VariableDomain> variable_domains(formulation->VariableCount());
+-	for (int i = 0; i < formulation->VariableCount(); ++i)
+-		variable_domains[i] = formulation->GetVariableDomain(formulation->VariableAtIndex(i));
++	detail::VariableDomains variable_domains(formulation);
+ 	cplex::chgprobtype(formulation->Environment(), formulation->Problem(), CPXPROB_LP);
+ 	
+ 	// Optimize.
+@@ -502,8 +501,7 @@ LPExecutionLog solve_lp(CplexFormulation* formulation, ostream* screen_output, D
+ 	extract_cplex_lp_execution_info(formulation, &execution_log, options);
+ 	
+ 	// Return the variable domain to all variables.
+-	for (int i = 0; i < formulation->VariableCount(); ++i)
+-		formulation->SetVariableDomain(formulation->VariableAtIndex(i), variable_domains[i]);
++	variable_domains.Restore(formulation);
+ 	
+ 	return execution_log;
+ }
+diff --git a/cpp/lera/goc/src/linear_programming/cplex/cplex_variable_domains.h b/cpp/lera/goc/src/linear_programming/cplex/cplex_variable_domains.h
+new file mode 100644
+index 0000000..18df569
+--- /dev/null
++++ b/cpp/lera/goc/src/linear_programming/cplex/cplex_variable_domains.h
+@@ -0,0 +1,69 @@
++#ifndef GOC_CPLEX_VARIABLE_DOMAINS_H
++#define GOC_CPLEX_VARIABLE_DOMAINS_H
++
++#include <algorithm>
++#include <numeric>
++#include <typeinfo>
++#include <vector>
++
++#include "goc/linear_programming/cplex/cplex_formulation.h"
++
++namespace goc::cplex::detail
++{
++// Keep this snapshot local to one solve_lp call. Restoration is explicit so an exception follows the existing path, without an extra CPLEX mutation on unwind.
++class VariableDomains
++{
++public:
++    explicit VariableDomains(CplexFormulation* formulation)
++    {
++        const int count = formulation->VariableCount();
++        // Preserve virtual domain accessors and uncommon problem types verbatim.
++        if (count > 1 && typeid(*formulation) == typeid(CplexFormulation) &&
++            cplex::getprobtype(formulation->Environment(), formulation->Problem()) == CPXPROB_MILP)
++        {
++            types_.resize(count);
++            cplex::getctype(formulation->Environment(), formulation->Problem(), types_.data(), 0, count - 1);
++            if (std::all_of(types_.begin(), types_.end(), [](char type) {
++                    return type == 'C' || type == 'I' || type == 'B';
++                }))
++            {
++                indices_.resize(count - 1);
++                std::iota(indices_.begin(), indices_.end(), 1);
++                first_domain_ = types_[0] == 'B' ? VariableDomain::Binary :
++                    types_[0] == 'I' ? VariableDomain::Integer : VariableDomain::Real;
++                batched_ = true;
++                return;
++            }
++        }
++
++        domains_.resize(count);
++        for (int i = 0; i < formulation->VariableCount(); ++i)
++            domains_[i] = formulation->GetVariableDomain(formulation->VariableAtIndex(i));
++    }
++
++    void Restore(CplexFormulation* formulation) const
++    {
++        if (batched_)
++        {
++            // Keep the original first mutation, including its LP-to-MILP transition. All subsequent updates target that same MILP object.
++            formulation->SetVariableDomain(formulation->VariableAtIndex(0), first_domain_);
++            cplex::chgctype(formulation->Environment(), formulation->Problem(),
++                           static_cast<int>(indices_.size()), indices_.data(), types_.data() + 1);
++            return;
++        }
++        for (int i = 0; i < formulation->VariableCount(); ++i)
++            formulation->SetVariableDomain(formulation->VariableAtIndex(i), domains_[i]);
++    }
++
++    bool UsesBatch() const { return batched_; }
++
++private:
++    bool batched_ = false;
++    VariableDomain first_domain_ = VariableDomain::Real;
++    std::vector<char> types_;
++    std::vector<int> indices_;
++    std::vector<VariableDomain> domains_;
++};
++}
++
++#endif
+diff --git a/cpp/lera/goc/src/math/pwl_function.cpp b/cpp/lera/goc/src/math/pwl_function.cpp
+index 99f4e9e..68ba8a8 100644
+--- a/cpp/lera/goc/src/math/pwl_function.cpp
++++ b/cpp/lera/goc/src/math/pwl_function.cpp
+@@ -840,6 +840,15 @@ bool hold_back_for_stacked_piece(const PWLFunction& f, int i, const LinearFuncti
+ PWLFunction operator+(const PWLFunction& f, const PWLFunction& g)
+ {
+     PWLFunction h;
++    // Label durations can contain stacked departure choices on jump-free
++    // inputs. At a scalar point operand, advancing after the first choice
++    // discards attainable lower durations. Keep this repair confined to legacy
++    // CHOICE-to-CHOICE tails, leaving JUMP attainment and step-mode rules intact.
++    const bool legacy = !step_exact_arithmetic();
++    const bool f_scalar_point = legacy && f.PieceCount() == 1 && !f.Piece(0).is_vertical()
++        && f.Piece(0).domain.left == f.Piece(0).domain.right;
++    const bool g_scalar_point = legacy && g.PieceCount() == 1 && !g.Piece(0).is_vertical()
++        && g.Piece(0).domain.left == g.Piece(0).domain.right;
+     int i = 0, j = 0;
+     while (i < f.PieceCount() && j < g.PieceCount())
+     {
+@@ -886,6 +895,12 @@ PWLFunction operator+(const PWLFunction& f, const PWLFunction& g)
+         // Stacked-boundary hold-back (see hold_back_for_stacked_piece above).
+         bool f_stack_next = hold_back_for_stacked_piece(f, i, pf);
+         bool g_stack_next = hold_back_for_stacked_piece(g, j, pg);
++        if (g_scalar_point && pf.is_choice_vertical() && i + 1 < f.PieceCount()
++            && f.Piece(i + 1).is_choice_vertical()
++            && f.Piece(i + 1).domain.left == pg.domain.left) f_stack_next = true;
++        if (f_scalar_point && pg.is_choice_vertical() && j + 1 < g.PieceCount()
++            && g.Piece(j + 1).is_choice_vertical()
++            && g.Piece(j + 1).domain.left == pf.domain.left) g_stack_next = true;
+         if (epsilon_equal(pf.domain.right, pg.domain.right))
+         {
+             if (f_stack_next) { ++i; }
+@@ -1110,4 +1125,4 @@ double PWLFunction::compute_area() const
+ }
+ 
+ 
+-} // namespace goc
+\ No newline at end of file
++} // namespace goc
+diff --git a/cpp/lera/main/include/bcp/branch_trace.h b/cpp/lera/main/include/bcp/branch_trace.h
+new file mode 100644
+index 0000000..195cb04
+--- /dev/null
++++ b/cpp/lera/main/include/bcp/branch_trace.h
+@@ -0,0 +1,88 @@
++#pragma once
++
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <stdexcept>
++
++namespace solver
++{
++// A first-branch diagnostic. With no environment path this does no IO.
++// The file is exclusive and flushed before any strong-branching probe.
++class FirstBranchTrace
++{
++public:
++    FirstBranchTrace()
++    {
++        static bool claimed = false;
++        const char* path = std::getenv("KAYROS_FIRST_BRANCH_TRACE");
++        if (path == nullptr || *path == '\0' || claimed) return;
++        claimed = true;
++        stream_ = std::fopen(path, "wx");
++        if (stream_ == nullptr) throw std::runtime_error("Cannot exclusively create first-branch trace");
++    }
++
++    ~FirstBranchTrace() { if (stream_) std::fclose(stream_); }
++    FirstBranchTrace(const FirstBranchTrace&) = delete;
++    FirstBranchTrace& operator=(const FirstBranchTrace&) = delete;
++    explicit operator bool() const { return stream_ != nullptr; }
++
++    template<class Arcs, class Matrix, class Valuation>
++    void Begin(int node, double bound, const Arcs& canonical, const Matrix& x,
++               const Arcs& legacy, const Matrix& raw_x, const Valuation& raw)
++    {
++        std::fprintf(stream_, "{\"event\":\"first_branch_begin\",\"node\":%d,\"bound\":", node);
++        Number(bound);
++        std::fprintf(stream_, ",\"raw_valuation_order\":[");
++        bool comma = false;
++        for (const auto& item : raw)
++        {
++            if (comma) std::fprintf(stream_, ",");
++            comma = true;
++            std::fprintf(stream_, "[%d,", item.first.Index());
++            Number(item.second);
++            std::fprintf(stream_, "]");
++        }
++        std::fprintf(stream_, "],\"canonical_candidates\":[");
++        Candidates(canonical, x);
++        std::fprintf(stream_, "],\"legacy_order_candidates\":[");
++        Candidates(legacy, raw_x);
++        std::fprintf(stream_, "]}\n");
++        std::fflush(stream_);
++    }
++
++    void Finish(int tail, int head, double estimate)
++    {
++        if (!stream_) return;
++        std::fprintf(stream_, "{\"event\":\"first_branch_selected\",\"tail\":%d,\"head\":%d,\"estimate\":", tail, head);
++        Number(estimate);
++        std::fprintf(stream_, "}\n");
++        std::fflush(stream_);
++    }
++
++private:
++    void Number(double value)
++    {
++        if (std::isfinite(value)) std::fprintf(stream_, "%.17g", value);
++        else std::fprintf(stream_, "null");
++    }
++
++    template<class Arcs, class Matrix>
++    void Candidates(const Arcs& arcs, const Matrix& x)
++    {
++        bool comma = false;
++        for (const auto& arc : arcs)
++        {
++            if (comma) std::fprintf(stream_, ",");
++            comma = true;
++            std::fprintf(stream_, "{\"tail\":%d,\"head\":%d,\"fraction\":", arc.tail, arc.head);
++            Number(x[arc.tail][arc.head]);
++            std::fprintf(stream_, ",\"distance_from_half\":");
++            Number(std::fabs(0.5 - x[arc.tail][arc.head]));
++            std::fprintf(stream_, "}");
++        }
++    }
++
++    std::FILE* stream_ = nullptr;
++};
++} // namespace solver
+diff --git a/cpp/lera/main/include/bcp/ordered_valuation.h b/cpp/lera/main/include/bcp/ordered_valuation.h
+new file mode 100644
+index 0000000..9f692e3
+--- /dev/null
++++ b/cpp/lera/main/include/bcp/ordered_valuation.h
+@@ -0,0 +1,21 @@
++#pragma once
++
++#include <algorithm>
++#include <utility>
++#include <vector>
++
++#include "goc/linear_programming/model/valuation.h"
++
++namespace solver
++{
++// Variable identity hashes contain allocation addresses. Numerical reductions
++// instead visit the current formulation columns in a reproducible order.
++inline std::vector<std::pair<goc::Variable, double>> ordered_valuation(const goc::Valuation& valuation)
++{
++    std::vector<std::pair<goc::Variable, double>> values(valuation.begin(), valuation.end());
++    std::sort(values.begin(), values.end(), [](const auto& left, const auto& right) {
++        return left.first.Index() < right.first.Index();
++    });
++    return values;
++}
++} // namespace solver
+diff --git a/cpp/lera/main/src/bcp/bcp.cpp b/cpp/lera/main/src/bcp/bcp.cpp
+index ae9e67b..17c4f88 100644
+--- a/cpp/lera/main/src/bcp/bcp.cpp
++++ b/cpp/lera/main/src/bcp/bcp.cpp
+@@ -5,6 +5,8 @@
+ //
+ 
+ #include "bcp/bcp.h"
++#include "bcp/branch_trace.h"
++#include "bcp/ordered_valuation.h"
+ 
+ #include <climits>
+ 
+@@ -288,7 +290,7 @@ void BCP::BranchNode(Node* node)
+ 	
+ 	// Calculate z[x_ij] values.
+ 	Matrix<double> x(D.NbVertices(), D.NbVertices(), 0.0);
+-	for (auto& y_val: node->opt)
++	for (const auto& y_val: ordered_valuation(node->opt))
+ 	{
+ 		auto& r = spf->RouteOf(y_val.first);
+ 		for (int k = 1; k < (int)r.path.size()-2; ++k) x[r.path[k]][r.path[k+1]] += y_val.second;
+@@ -302,9 +304,33 @@ void BCP::BranchNode(Node* node)
+ 			x_most.push_back(e);
+ 	sort(x_most.begin(), x_most.end(), [&] (Arc e, Arc f) { return fabs(0.5-x[e.tail][e.head]) < fabs(0.5-x[f.tail][f.head]); });
+ 	while (x_most.size() > STRONG_BRANCH_SIZE) x_most.pop_back();
++
++    FirstBranchTrace branch_trace;
++    if (branch_trace)
++    {
++        Matrix<double> raw_x(D.NbVertices(), D.NbVertices(), 0.0);
++        for (const auto& y_val : node->opt)
++        {
++            const auto& route = spf->RouteOf(y_val.first);
++            for (int k = 1; k < (int) route.path.size() - 2; ++k)
++                raw_x[route.path[k]][route.path[k + 1]] += y_val.second;
++        }
++        vector<Arc> legacy_candidates;
++        for (Arc arc : D.Arcs())
++            if (epsilon_bigger(raw_x[arc.tail][arc.head], 0.0)
++                    && epsilon_smaller(raw_x[arc.tail][arc.head], 1.0))
++                legacy_candidates.push_back(arc);
++        sort(legacy_candidates.begin(), legacy_candidates.end(), [&](Arc a, Arc b) {
++            return fabs(0.5 - raw_x[a.tail][a.head]) < fabs(0.5 - raw_x[b.tail][b.head]);
++        });
++        while (legacy_candidates.size() > STRONG_BRANCH_SIZE) legacy_candidates.pop_back();
++        branch_trace.Begin(node->index, node->bound, x_most, x, legacy_candidates, raw_x, node->opt);
++    }
+ 	
+ 	// Calculate all candidate estimate bounds and keep the best one.
+ 	vector<Node> best_candidate;
++    int selected_tail = -1, selected_head = -1;
++    double selected_estimate = -INFTY;
+     int selected_infeasible = 0;
+     if (x_most.empty()) ++unbranched_fractional_count;
+ 	if (!x_most.empty())
+@@ -332,6 +358,9 @@ void BCP::BranchNode(Node* node)
+ 			if (min(left.bound, right.bound) > best_estimate)
+ 			{
+ 				best_estimate = min(left.bound, right.bound);
++                selected_tail = e.tail;
++                selected_head = e.head;
++                selected_estimate = best_estimate;
+ 				best_candidate = {};
+                 selected_infeasible = int(left.rmp_infeasible) + int(right.rmp_infeasible);
+ 				if (left.bound < INFTY) best_candidate.push_back(left);
+@@ -340,6 +369,7 @@ void BCP::BranchNode(Node* node)
+ 		}
+ 	}
+ 	
++    branch_trace.Finish(selected_tail, selected_head, selected_estimate);
+     if (log.status == BCStatus::DidNotStart) selected_rmp_infeasible_count += selected_infeasible;
+ 	*log.branching_time += rolex_branch.Pause();
+ 	// Process new children to the queue.
+@@ -374,7 +404,7 @@ bool BCP::SeparateCuts(const Valuation& z)
+ 	// Parse basis variables.
+ 	vector<VertexSet> z_visited; // z_visited[i] = vertices visited by basis variable i.
+ 	vector<double> z_values; // z_values[i] = value of basis variable i.
+-	for (auto& y_val: z)
++	for (const auto& y_val: ordered_valuation(z))
+ 	{
+ 		auto route = spf->RouteOf(y_val.first);
+ 		z_visited.push_back(create_bitset<MAX_N>(route.path));
+@@ -408,4 +438,4 @@ bool BCP::SeparateCuts(const Valuation& z)
+ 	if (epsilon_bigger(best_violation, 0.1)) spf->AddCut(best);
+ 	return epsilon_bigger(best_violation, 0.1);
+ }
+-} // namespace
+\ No newline at end of file
++} // namespace
+diff --git a/tests/cpp/test_cplex_variable_domains.cpp b/tests/cpp/test_cplex_variable_domains.cpp
+new file mode 100644
+index 0000000..c3233cc
+--- /dev/null
++++ b/tests/cpp/test_cplex_variable_domains.cpp
+@@ -0,0 +1,347 @@
++#include <bit>
++#include <cstdint>
++#include <iostream>
++#include <memory>
++#include <stdexcept>
++#include <string>
++#include <vector>
++
++#include "goc/lib/json.hpp"
++#include "goc/linear_programming/cplex/cplex_formulation.h"
++#include "goc/linear_programming/cplex/cplex_solver.h"
++#include "../../cpp/lera/goc/src/linear_programming/cplex/cplex_variable_domains.h"
++
++using goc::CplexFormulation;
++using goc::VariableDomain;
++using nlohmann::json;
++namespace cpx = goc::cplex;
++
++namespace
++{
++void require(bool condition, const std::string& message)
++{
++    if (!condition) throw std::runtime_error(message);
++}
++
++json bits(const std::vector<double>& values)
++{
++    json result = json::array();
++    for (double value : values) result.push_back(std::bit_cast<uint64_t>(value));
++    return result;
++}
++
++void equal(const json& expected, const json& actual, const std::string& context)
++{
++    if (expected != actual)
++        throw std::runtime_error(context + "\nlegacy=" + expected.dump() + "\ncandidate=" + actual.dump());
++}
++
++// These are the original snapshot and restoration loops from best327e481.
++class LegacyDomains
++{
++public:
++    explicit LegacyDomains(CplexFormulation* formulation) : domains_(formulation->VariableCount())
++    {
++        for (int i = 0; i < formulation->VariableCount(); ++i)
++            domains_[i] = formulation->GetVariableDomain(formulation->VariableAtIndex(i));
++    }
++
++    void Restore(CplexFormulation* formulation) const
++    {
++        for (int i = 0; i < formulation->VariableCount(); ++i)
++            formulation->SetVariableDomain(formulation->VariableAtIndex(i), domains_[i]);
++    }
++
++private:
++    std::vector<VariableDomain> domains_;
++};
++
++void configure(CplexFormulation& model)
++{
++    auto env = model.Environment();
++    cpx::setdefaults(env);
++    cpx::setintparam(env, CPX_PARAM_THREADS, 1);
++    cpx::setdblparam(env, CPX_PARAM_EPRHS, 1e-7);
++    cpx::setdblparam(env, CPX_PARAM_EPOPT, 1e-7);
++    cpx::setdblparam(env, CPX_PARAM_EPINT, 1e-6);
++    cpx::setdblparam(env, CPX_PARAM_EPGAP, 0.0);
++    cpx::setdblparam(env, CPX_PARAM_TILIM, 30.0);
++    cpx::setintparam(env, CPX_PARAM_REDUCE, CPX_PREREDUCE_NOPRIMALORDUAL);
++}
++
++json model_state(CplexFormulation& model)
++{
++    auto env = model.Environment();
++    auto lp = model.Problem();
++    const int count = model.VariableCount();
++    json result = {{"problem_type", cpx::getprobtype(env, lp)}, {"columns", count}};
++    if (count)
++    {
++        std::vector<char> types(count);
++        std::vector<double> lower(count), upper(count);
++        int status = CPXgetctype(env, lp, types.data(), 0, count - 1);
++        result["ctype_status"] = status;
++        if (!status) result["types"] = std::string(types.begin(), types.end());
++        cpx::getlb(env, lp, lower.data(), 0, count - 1);
++        cpx::getub(env, lp, upper.data(), 0, count - 1);
++        result["lower_bits"] = bits(lower);
++        result["upper_bits"] = bits(upper);
++    }
++    return result;
++}
++
++// Raw query status is part of the observation, including unavailable bases or solutions after a type change.
++json solution_state(CplexFormulation& model)
++{
++    auto env = model.Environment();
++    auto lp = model.Problem();
++    const int columns = model.VariableCount(), rows = model.ConstraintCount();
++    json result = {{"status", cpx::getstat(env, lp)}};
++    double objective = 0.0;
++    int status = CPXgetobjval(env, lp, &objective);
++    result["objective_status"] = status;
++    if (!status) result["objective_bits"] = std::bit_cast<uint64_t>(objective);
++    if (columns)
++    {
++        std::vector<double> primal(columns), reduced(columns);
++        status = CPXgetx(env, lp, primal.data(), 0, columns - 1);
++        result["primal_status"] = status;
++        if (!status) result["primal_bits"] = bits(primal);
++        status = CPXgetdj(env, lp, reduced.data(), 0, columns - 1);
++        result["reduced_cost_status"] = status;
++        if (!status) result["reduced_cost_bits"] = bits(reduced);
++    }
++    if (rows)
++    {
++        std::vector<double> duals(rows);
++        status = CPXgetpi(env, lp, duals.data(), 0, rows - 1);
++        result["dual_status"] = status;
++        if (!status) result["dual_bits"] = bits(duals);
++    }
++    std::vector<int> column_basis(columns), row_basis(rows);
++    status = CPXgetbase(env, lp, columns ? column_basis.data() : nullptr, rows ? row_basis.data() : nullptr);
++    result["basis_status"] = status;
++    if (!status)
++    {
++        result["column_basis"] = column_basis;
++        result["row_basis"] = row_basis;
++    }
++    return result;
++}
++
++struct Case
++{
++    std::string name;
++    std::vector<char> types;
++    std::vector<double> lower, upper, objective;
++    bool constrained = false;
++    bool batch = true;
++    int problem_type = CPXPROB_MILP;
++};
++
++std::unique_ptr<CplexFormulation> make_model(const Case& test)
++{
++    auto model = std::make_unique<CplexFormulation>();
++    goc::Expression objective, capacity;
++    for (int i = 0; i < static_cast<int>(test.types.size()); ++i)
++    {
++        const char type = test.types[i];
++        auto domain = type == 'B' ? VariableDomain::Binary :
++            type == 'I' ? VariableDomain::Integer : VariableDomain::Real;
++        auto variable = model->AddVariable("x" + std::to_string(i), domain, test.lower[i], test.upper[i]);
++        if (type == 'S' || type == 'N') cpx::chgctype(model->Environment(), model->Problem(), 1, &i, &type);
++        objective += test.objective[i] * variable;
++        if (test.constrained) capacity += (type == 'B' ? 3.0 : type == 'I' ? 1.0 : 2.0) * variable;
++    }
++    if (test.types.empty()) cpx::chgobjsen(model->Environment(), model->Problem(), CPX_MAX);
++    else model->Maximize(objective);
++    if (test.constrained) model->AddConstraint(capacity.LEQ(7.5));
++    cpx::chgprobtype(model->Environment(), model->Problem(), test.problem_type);
++    configure(*model);
++    return model;
++}
++
++template<class Domains>
++json cycle(CplexFormulation& model, bool optimize)
++{
++    Domains domains(&model);
++    cpx::chgprobtype(model.Environment(), model.Problem(), CPXPROB_LP);
++    if (optimize) cpx::lpopt(model.Environment(), model.Problem());
++    json result = {{"relaxed_model", model_state(model)}};
++    if (optimize) result["lp"] = solution_state(model);
++    domains.Restore(&model);
++    result["restored_model"] = model_state(model);
++    if (optimize) result["after_restore"] = solution_state(model);
++    return result;
++}
++
++void check_case(const Case& test, json& records)
++{
++    auto legacy = make_model(test), candidate = make_model(test);
++    const json original = model_state(*legacy);
++    equal(original, model_state(*candidate), test.name + " initial state");
++    cpx::detail::VariableDomains selector(candidate.get());
++    require(selector.UsesBatch() == test.batch, test.name + " wrong batching selection");
++    json rounds = json::array();
++    for (int round = 0; round < 3; ++round)
++    {
++        auto old_result = cycle<LegacyDomains>(*legacy, !test.types.empty());
++        auto new_result = cycle<cpx::detail::VariableDomains>(*candidate, !test.types.empty());
++        equal(old_result, new_result, test.name + " LP cycle " + std::to_string(round));
++        if (test.batch) equal(original, model_state(*candidate), test.name + " changed types or bounds");
++        rounds.push_back(new_result);
++    }
++    json mip = nullptr;
++    if (cpx::getprobtype(candidate->Environment(), candidate->Problem()) == CPXPROB_MILP)
++    {
++        cpx::mipopt(legacy->Environment(), legacy->Problem());
++        cpx::mipopt(candidate->Environment(), candidate->Problem());
++        mip = solution_state(*candidate);
++        equal(solution_state(*legacy), mip, test.name + " MIP following 3 LP solves");
++        equal(model_state(*legacy), model_state(*candidate), test.name + " MIP model state");
++        if (test.name == "mixed-CIB")
++        {
++            require(rounds[0]["lp"]["status"] == CPX_STAT_OPTIMAL, "mixed LP not optimal");
++            require(rounds[0]["lp"]["objective_bits"] == std::bit_cast<uint64_t>(15.0), "wrong mixed LP objective");
++            require(mip["status"] == CPXMIP_OPTIMAL, "mixed MIP not optimal");
++            require(mip["objective_bits"] == std::bit_cast<uint64_t>(14.75), "wrong mixed MIP objective");
++        }
++    }
++    records.push_back({{"case", test.name}, {"batch", test.batch}, {"original", original}, {"rounds", rounds}, {"mip", mip}});
++}
++
++template<class Callback>
++std::string exception_text(Callback callback)
++{
++    try { callback(); }
++    catch (const std::runtime_error& error) { return error.what(); }
++    return "";
++}
++
++void check_errors(const Case& test, json& records)
++{
++    auto legacy = make_model(test), candidate = make_model(test);
++    cpx::chgprobtype(legacy->Environment(), legacy->Problem(), CPXPROB_LP);
++    cpx::chgprobtype(candidate->Environment(), candidate->Problem(), CPXPROB_LP);
++    auto old_error = exception_text([&] { LegacyDomains snapshot(legacy.get()); });
++    auto new_error = exception_text([&] { cpx::detail::VariableDomains snapshot(candidate.get()); });
++    require(old_error == new_error, "snapshot exception text changed");
++    equal(model_state(*legacy), model_state(*candidate), "snapshot exception mutated state");
++    records.push_back({{"case", "explicit-LP-error"}, {"error", new_error}});
++
++    legacy = make_model(test);
++    candidate = make_model(test);
++    LegacyDomains old_snapshot(legacy.get());
++    cpx::detail::VariableDomains new_snapshot(candidate.get());
++    for (auto* model : {legacy.get(), candidate.get()})
++    {
++        cpx::mipopt(model->Environment(), model->Problem());
++        cpx::chgprobtype(model->Environment(), model->Problem(), CPXPROB_FIXEDMILP);
++    }
++    old_error = exception_text([&] { old_snapshot.Restore(legacy.get()); });
++    new_error = exception_text([&] { new_snapshot.Restore(candidate.get()); });
++    require(!old_error.empty(), "expected CPXchgctype error on a fixed MILP");
++    require(old_error == new_error, "restore exception text changed");
++    equal(model_state(*legacy), model_state(*candidate), "restore exception state differs");
++    records.push_back({{"case", "fixed-MILP-restore-error"}, {"error", new_error}});
++}
++
++void check_solver_integration(const Case& test, json& records)
++{
++    auto legacy = make_model(test), candidate = make_model(test);
++    auto expected = cycle<LegacyDomains>(*legacy, true);
++    auto result = cpx::solve_lp(candidate.get(), nullptr, goc::Duration(30, goc::DurationUnit::Seconds),
++                                json::object(), {goc::LPOption::Incumbent, goc::LPOption::Duals});
++    require(result.status.IsSet() && result.status.Value() == goc::LPStatus::Optimum, "production LP status");
++    require(result.incumbent_value.IsSet(), "production LP value missing");
++    require(std::bit_cast<uint64_t>(result.incumbent_value.Value()) ==
++                expected["lp"]["objective_bits"].get<uint64_t>(), "production LP value differs");
++    require(result.incumbent.IsSet() && result.duals.IsSet(), "production primal or dual missing");
++    std::vector<double> primal, expected_primal;
++    goc::Valuation old_incumbent;
++    for (int i = 0; i < candidate->VariableCount(); ++i)
++        old_incumbent.SetValue(candidate->VariableAtIndex(i),
++            std::bit_cast<double>(expected["lp"]["primal_bits"][i].get<uint64_t>()));
++    for (int i = 0; i < candidate->VariableCount(); ++i)
++    {
++        primal.push_back(result.incumbent.Value()[candidate->VariableAtIndex(i)]);
++        expected_primal.push_back(old_incumbent[candidate->VariableAtIndex(i)]);
++    }
++    equal(bits(expected_primal), bits(primal), "production primal differs");
++    equal(expected["lp"]["dual_bits"], bits(result.duals.Value()), "production dual differs");
++    equal(expected["restored_model"], model_state(*candidate), "production restored model differs");
++    equal(expected["after_restore"], solution_state(*candidate), "production post-restore state differs");
++    cpx::mipopt(legacy->Environment(), legacy->Problem());
++    cpx::mipopt(candidate->Environment(), candidate->Problem());
++    equal(solution_state(*legacy), solution_state(*candidate), "production LP then MIP differs");
++    records.push_back({{"case", "production-solve-lp"}, {"passed", true}});
++}
++
++class DerivedFormulation : public CplexFormulation
++{
++public:
++    mutable int reads = 0;
++    int writes = 0;
++    VariableDomain GetVariableDomain(const goc::Variable& variable) const override
++    {
++        ++reads;
++        return CplexFormulation::GetVariableDomain(variable);
++    }
++    void SetVariableDomain(const goc::Variable& variable, VariableDomain domain) override
++    {
++        ++writes;
++        CplexFormulation::SetVariableDomain(variable, domain);
++    }
++};
++
++void check_virtual_accessors(json& records)
++{
++    DerivedFormulation model;
++    model.AddVariable("x", VariableDomain::Binary, 0.0, 1.0);
++    model.AddVariable("y", VariableDomain::Integer, -2.0, 3.0);
++    model.reads = model.writes = 0;
++    cpx::detail::VariableDomains snapshot(&model);
++    require(!snapshot.UsesBatch() && model.reads == 2, "virtual domain reads bypassed");
++    cpx::chgprobtype(model.Environment(), model.Problem(), CPXPROB_LP);
++    snapshot.Restore(&model);
++    require(model.writes == 2, "virtual domain writes bypassed");
++    records.push_back({{"case", "derived-formulation"}, {"reads", model.reads}, {"writes", model.writes}});
++}
++}
++
++int main()
++{
++    json records = json::array();
++    try
++    {
++        const Case mixed{"mixed-CIB", {'C', 'I', 'B'}, {0, 0, 0}, {4.25, 5, 1}, {3, 2, 6}, true};
++        const std::vector<Case> cases{
++            mixed,
++            {"mixed-BIC", {'B', 'I', 'C'}, {0, 0, 0}, {1, 5, 4.25}, {6, 2, 3}, true},
++            {"mixed-IBC", {'I', 'B', 'C'}, {0, 0, 0}, {5, 1, 4.25}, {2, 6, 3}, true},
++            {"continuous-MILP", {'C', 'C', 'C'}, {-1.5, -0.0, 0.125}, {2.25, 4.5, 0.125}, {1, 2, 3}},
++            {"fixed-binaries", {'B', 'B', 'I', 'C'}, {0, 1, -3, -1.25}, {0, 1, -1, 2.5}, {4, 3, 2, 1}},
++            {"fractional-binary-bounds", {'B', 'C'}, {0.25, -1}, {0.75, 2}, {1, 2}},
++            {"wide-binary-bounds", {'B', 'C'}, {-1, -1}, {2, 2}, {1, 2}},
++            {"infinite-continuous-bounds", {'C', 'I'}, {-CPX_INFBOUND, -2}, {CPX_INFBOUND, 3}, {0, 1}},
++            {"one-integer", {'I'}, {-3}, {2.75}, {1}, false, false},
++            {"empty-LP", {}, {}, {}, {}, false, false, CPXPROB_LP},
++            {"empty-MILP", {}, {}, {}, {}, false, false},
++            {"semitype-fallback", {'S', 'N', 'B'}, {2, 2, 0}, {5, 5, 1}, {1, 2, 3}, false, false},
++            {"empty-quadratic-MIQP-fallback", {'I', 'C'}, {0, 0}, {2.5, 3.25}, {1, 2}, false, false, CPXPROB_MIQP},
++        };
++        for (const auto& test : cases) check_case(test, records);
++        check_errors(mixed, records);
++        check_solver_integration(mixed, records);
++        check_virtual_accessors(records);
++        CplexFormulation version_model;
++        std::cout << json({{"passed", true}, {"cplex_version", CPXversion(version_model.Environment())},
++                           {"cases", records}, {"timing_claim", false}}).dump(2) << '\n';
++        return 0;
++    }
++    catch (const std::exception& error)
++    {
++        std::cout << json({{"passed", false}, {"error", error.what()}, {"completed_cases", records}}).dump(2) << '\n';
++        return 1;
++    }
++}
+diff --git a/tests/cpp/test_ordered_valuation.cpp b/tests/cpp/test_ordered_valuation.cpp
+new file mode 100644
+index 0000000..6b15f9e
+--- /dev/null
++++ b/tests/cpp/test_ordered_valuation.cpp
+@@ -0,0 +1,65 @@
++#include <algorithm>
++#include <array>
++#include <bit>
++#include <cstdint>
++#include <cstdlib>
++#include <iostream>
++#include <numeric>
++#include <random>
++#include <set>
++
++#include "bcp/ordered_valuation.h"
++#include "goc/linear_programming/highs/matrix_formulation.h"
++
++static void require(bool value)
++{
++    if (!value) { std::cerr << "ordered valuation regression\n"; std::exit(1); }
++}
++
++int main()
++{
++    // Fractional values from the captured C201 root LP, including its dust.
++    const std::array<double, 23> values{
++        .05, .05, .05, .05, .05, .05, .05, .05, .05, .05,
++        .05000000000000007, .05, .05, .05, .049999999999999795,
++        .05, .050000000000000114, .05, .05, .049999999999999906,
++        .049999999999999836, 1., 1.};
++    std::mt19937 rng(58);
++    std::set<uint64_t> raw_results;
++    std::array<uint64_t, 3> expected{};
++    for (int trial = 0; trial < 128; ++trial)
++    {
++        goc::MatrixFormulation formulation;
++        std::vector<goc::Variable> variables;
++        for (int index = 0; index < (int) values.size(); ++index)
++            variables.push_back(formulation.AddVariable("y_" + std::to_string(index)));
++        std::vector<int> order(values.size());
++        std::iota(order.begin(), order.end(), 0);
++        std::shuffle(order.begin(), order.end(), rng);
++        goc::Valuation valuation;
++        for (int index : order) valuation.SetValue(variables[index], values[index]);
++        double raw = 0.;
++        for (const auto& item : valuation) raw += item.second;
++        raw_results.insert(std::bit_cast<uint64_t>(raw));
++        auto sorted = solver::ordered_valuation(valuation);
++        require(sorted.size() == values.size());
++        std::array<double, 3> sums{};
++        for (int index = 0; index < (int) sorted.size(); ++index)
++        {
++            require(sorted[index].first.Index() == index);
++            require(std::bit_cast<uint64_t>(sorted[index].second) == std::bit_cast<uint64_t>(values[index]));
++            sums[0] += sorted[index].second;
++            if (index % 3) sums[1] += sorted[index].second;
++            if (index % 2) sums[2] += sorted[index].second;
++        }
++        for (int index = 0; index < 3; ++index)
++        {
++            uint64_t bits = std::bit_cast<uint64_t>(sums[index]);
++            if (trial == 0) expected[index] = bits;
++            else require(bits == expected[index]);
++        }
++    }
++    require(raw_results.size() > 1);
++    std::cout << "PASS 128 valuation permutations, invariant canonical reductions, "
++              << raw_results.size() << " distinct raw sum bit patterns\n";
++}
+diff --git a/tests/cpp/test_point_addition.cpp b/tests/cpp/test_point_addition.cpp
+new file mode 100644
+index 0000000..545ed1e
+--- /dev/null
++++ b/tests/cpp/test_point_addition.cpp
+@@ -0,0 +1,84 @@
++#include "goc/math/pwl_function.h"
++
++#include <cmath>
++#include <iostream>
++#include <stdexcept>
++
++namespace {
++void require(bool condition, const char* message)
++{
++    if (!condition) throw std::runtime_error(message);
++}
++
++goc::PWLFunction choices()
++{
++    goc::PWLFunction f;
++    f.AddPiece(goc::LinearFunction({770.0, 62.6125}, {770.0, 50.425}).as_choice_vertical());
++    f.AddPiece(goc::LinearFunction({770.0, 50.425}, {770.0, 50.0}).as_choice_vertical());
++    f.AddPiece(goc::LinearFunction({770.0, 50.0}, {770.0, 41.0272189349112}).as_choice_vertical());
++    f.AddPiece(goc::LinearFunction({770.0, 41.0272189349112}, {771.0, 41.1195266272189}));
++    return f;
++}
++
++void check(bool step_exact)
++{
++    goc::StepExactArithmeticScope scope(step_exact);
++    const auto f = choices();
++    const auto travel = goc::PWLFunction::ConstantFunction(19.0, {770.0, 770.0});
++    const auto departure = goc::PWLFunction::ConstantFunction(770.0, {789.0, 789.0});
++    const double expected = f.MinValueAt(770.0) + 19.0;
++    for (const auto& sum : {f + travel, travel + f})
++    {
++        require(sum.Domain().left == 770.0 && sum.Domain().right == 770.0,
++                "A scalar point must restrict the sum to its abscissa");
++        require(std::abs(sum.MinValueAt(770.0) - expected) < 1e-10,
++                "Adding a scalar point lost an attainable departure choice");
++        const auto extended = sum.Compose(departure);
++        require(std::abs(extended.MinValueAt(789.0) - expected) < 1e-10,
++                "Tight-arc extension must retain the best prefix duration");
++    }
++    const auto outside = goc::PWLFunction::ConstantFunction(19.0, {772.0, 772.0});
++    require((f + outside).Empty() && (outside + f).Empty(),
++            "A disjoint point must not create a new feasible time");
++    const auto ordinary = goc::PWLFunction::ConstantFunction(2.0, {0.0, 4.0});
++    const auto point = goc::PWLFunction::ConstantFunction(3.0, {4.0, 4.0});
++    require((ordinary + point).MinValueAt(4.0) == 5.0,
++            "Ordinary scalar-point addition must remain unchanged");
++
++    goc::PWLFunction boundary;
++    boundary.AddPiece(goc::LinearFunction({760.0, 43.0}, {770.0, 43.0}));
++    boundary.AddPiece(goc::LinearFunction({770.0, 43.0}, {770.0, 41.0}).as_choice_vertical());
++    for (const auto& sum : {boundary + travel, travel + boundary})
++        require(sum.MinValueAt(770.0) == 60.0,
++                "An ordinary segment followed by a boundary choice must retain the choice");
++
++    goc::PWLFunction jump;
++    jump.AddPiece(goc::LinearFunction({0.0, 2.0}, {1.0, 2.0}));
++    jump.AddPiece(goc::LinearFunction({1.0, 2.0}, {1.0, 8.0}));
++    jump.AddPiece(goc::LinearFunction({1.0, 8.0}, {2.0, 8.0}));
++    const auto at_jump = goc::PWLFunction::ConstantFunction(3.0, {1.0, 1.0});
++    for (const auto& sum : {jump + at_jump, at_jump + jump})
++    {
++        require(sum.PieceCount() == 2 && sum.Piece(1).is_jump_vertical(),
++                "The point-choice repair must leave the unrelated JUMP sweep unchanged");
++        require(sum.Value(1.0) == 5.0,
++                "The attained side of an unrelated JUMP must remain unchanged");
++    }
++}
++}
++
++int main()
++{
++    try
++    {
++        check(false);
++        check(true);
++        std::cout << "Point-addition and tight-extension invariants pass in legacy and step-exact modes\n";
++        return 0;
++    }
++    catch (const std::exception& error)
++    {
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++}

@@ -43,6 +43,7 @@ from probe_runner import atomic_json, digest, load_completed
 
 HORIZON = 3600.0
 MEMORY_MB = 16384
+FINAL_SOURCE = '9d64b7c53ddaea7a578d247ebd28db43ae0d4e56'
 UPSTREAM_SOURCE = 'f2c9e20'
 UPSTREAM_BINARY_SHA256 = '59ce565d28ada373f5ae59a13691e64e4f9976e6ed79e4a48808d84fb1110783'
 UPSTREAM_MINIMAL_PATCH_SHA256 = 'ba75d827faff78c1c12fe73774ca658fe28fe96cd4806ee69502db8e6f685bbf'
@@ -70,6 +71,86 @@ def checked_file(path, expected):
     if sha256(path) != expected:
         raise ValueError(f'Frozen artifact hash mismatch: {path}')
     return path
+
+
+def verify_allocation_preflight(wave, spec, *, job_id=None, hosts=None):
+    """Verify the copied allocation evidence without accessing remote paths."""
+    binding = spec.get('allocation_preflight')
+    if not binding:
+        if spec.get('kayros_source_id') == FINAL_SOURCE:
+            raise ValueError('The final correction-on panel requires allocation_preflight evidence')
+        return None
+    root = Path(wave) / 'frozen-preflight'
+    for relative, expected in binding['files_sha256'].items():
+        path = (root / relative).resolve()
+        if not path.is_relative_to(root.resolve()):
+            raise ValueError('Preflight artifact path escapes the frozen evidence')
+        checked_file(path, expected)
+    complete = json.loads(checked_file(root / 'complete.json', binding['sha256']).read_bytes())
+    if complete.get('all_checks_passed') is not True:
+        raise ValueError('Allocation preflight did not pass')
+    plan = json.loads(checked_file(root / 'plan.json', complete['plan_sha256']).read_bytes())
+    original_design = json.loads(checked_file(root / 'design.json', plan['design_sha256']).read_bytes())
+    design = json.loads((Path(wave) / 'design.json').read_bytes())
+    if {k: v for k, v in design.items() if k != 'allocation_preflight'} != original_design:
+        raise ValueError('Wave design differs from the allocation preflight design')
+    if design.get('allocation_preflight', {}).get('sha256') != binding['sha256']:
+        raise ValueError('Design and wave preflight bindings differ')
+    if plan.get('checker') != spec['checker']:
+        raise ValueError('Preflight checker differs from the wave checker')
+    for relative, expected in plan['frozen_scripts_sha256'].items():
+        checked_file(root / relative, expected)
+    raw_nodefile = checked_file(root / 'allocated-nodefile.txt', plan['nodefile_sha256']).read_text()
+    if set(raw_nodefile.split()) != set(plan['hosts']):
+        raise ValueError('Preflight host set differs from its real allocation nodefile')
+    snapshots = [json.loads(checked_file(root / 'snapshots' / name, expected).read_bytes())
+                 for name, expected in complete['snapshot_sha256'].items()]
+    if any(row.get('plan_sha256') != complete['plan_sha256'] for row in snapshots):
+        raise ValueError('Preflight snapshot belongs to another frozen plan')
+    from ms58_dabia_preflight import cohort_slots
+    slots = cohort_slots(snapshots, plan['hosts'], plan['oar_job_id'])
+    if (complete.get('expected_hosts') != 45 or complete.get('expected_slots') != 180
+            or complete.get('snapshot_count') != len(snapshots)
+            or complete.get('oar_job_id') != plan['oar_job_id']
+            or complete.get('cohort_sha256') != snapshots[0]['cohort_sha256']
+            or binding.get('cohort_sha256') != complete['cohort_sha256']
+            or binding.get('oar_job_id') != plan['oar_job_id']
+            or binding.get('hosts') != plan['hosts']):
+        raise ValueError('Frozen preflight cohort identity or denominator mismatch')
+    frozen_slots = json.loads(checked_file(root / 'slots.json', complete['slots_sha256']).read_bytes())
+    if (slots != frozen_slots or json.loads((Path(wave) / 'slots.json').read_bytes()) != slots
+            or sha256(Path(wave) / 'slots.json') != complete['slots_sha256']):
+        raise ValueError('Wave slots differ from the inspected allocation')
+    if job_id is not None and job_id != plan['oar_job_id']:
+        raise ValueError('Launch job differs from the inspected allocation')
+    if hosts is not None and set(hosts) != set(plan['hosts']):
+        raise ValueError('Launch hosts differ from the inspected allocation')
+    if spec.get('scheduled_cells'):
+        scheduled = [(t['host'], t['cpu_core']) for t in spec['scheduled_cells']]
+        if sorted(scheduled) != sorted((s['host'], s['cpu_core']) for s in slots):
+            raise ValueError('Final scheduled cells must use every inspected slot exactly once')
+    return binding
+
+
+def freeze_allocation_preflight(design, wave, checker):
+    binding = design.get('allocation_preflight')
+    if not binding:
+        if design['kayros_source_id'] == FINAL_SOURCE:
+            raise ValueError('The final correction-on panel requires allocation_preflight evidence')
+        return None
+    complete_path = checked_file(binding['path'], binding['sha256'])
+    if complete_path.name != 'complete.json':
+        raise ValueError('allocation_preflight must identify complete.json')
+    root = wave / 'frozen-preflight'
+    shutil.copytree(complete_path.parent, root)
+    complete = json.loads((root / 'complete.json').read_bytes())
+    plan = json.loads((root / 'plan.json').read_bytes())
+    frozen = {'path': 'frozen-preflight/complete.json', 'sha256': binding['sha256'],
+        'cohort_sha256': complete.get('cohort_sha256'), 'oar_job_id': complete.get('oar_job_id'),
+        'hosts': plan.get('hosts'), 'files_sha256': {str(p.relative_to(root)): sha256(p)
+            for p in sorted(root.rglob('*')) if p.is_file()}}
+    verify_allocation_preflight(wave, dict(design, checker=checker, allocation_preflight=frozen))
+    return frozen
 
 
 def source_matches(declared, required):
@@ -286,6 +367,7 @@ def prepare(args):
     shutil.copyfile(args.design, wave / 'design.json')
     shutil.copyfile(args.slots, wave / 'slots.json')
     shutil.copytree(Path(__file__).resolve().parent, wave / 'frozen-scripts', ignore=shutil.ignore_patterns('__pycache__'))
+    allocation_preflight = freeze_allocation_preflight(design, wave, checker)
     inputs, references = freeze_inputs(design, wave, checker)
     manifests = {key: freeze_manifest(spec, key, wave, checker,
                     UPSTREAM_SOURCE if key == 'upstream' else design['kayros_source_id'])
@@ -323,6 +405,7 @@ def prepare(args):
         'upstream_binary_sha256': UPSTREAM_BINARY_SHA256,
         'upstream_minimal_patch_sha256': UPSTREAM_MINIMAL_PATCH_SHA256,
         'reference_manifests': references, 'horizon_s': HORIZON, 'memory_mb': MEMORY_MB,
+        'allocation_preflight': allocation_preflight,
         'clock_origin': 'solver_process_launch', 'prefix_clock_origin': 'solver_process_launch',
         'scheduled_count': len(tasks), 'available_concurrent_slots': len(slots),
         'maximum_queued_rounds': math.ceil(len(tasks) / len(slots)),
@@ -409,6 +492,7 @@ def verify_wave(wave):
     checked_file(spec['checker_python'], spec['checker_python_sha256'])
     checked_file(wave / 'design.json', spec['design_sha256'])
     checked_file(wave / 'slots.json', spec['slots_sha256'])
+    verify_allocation_preflight(wave, spec)
     if spec['scheduled_count'] != len(spec['scheduled_cells']):
         raise ValueError('Scheduled denominator mismatch')
     if len({t['task_id'] for t in spec['scheduled_cells']}) != spec['scheduled_count']:
@@ -428,6 +512,7 @@ def verify_wave(wave):
 def node(args):
     wave = args.wave.resolve()
     spec = verify_wave(wave)
+    verify_allocation_preflight(wave, spec, job_id=args.job_id)
     host = socket.gethostname().split('.')[0]
     tasks = [t for t in spec['scheduled_cells'] if t['host'].split('.')[0] == host]
     cores = sorted({t['cpu_core'] for t in tasks})
@@ -484,6 +569,7 @@ def launch(args):
         raise ValueError('Launch checker differs from frozen wave')
     allocated = set(Path(nodefile).read_text().split())
     hosts = sorted({t['host'] for t in spec['scheduled_cells']})
+    verify_allocation_preflight(wave, spec, job_id=args.job_id, hosts=allocated)
     if not set(hosts) <= allocated:
         raise ValueError('Scheduled hosts are outside the real OAR nodefile')
     (wave / 'launch-claim').mkdir()

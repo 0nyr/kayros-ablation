@@ -1,0 +1,1151 @@
+diff --git a/cpp/lera/bridge/lera_bridge.cpp b/cpp/lera/bridge/lera_bridge.cpp
+index 4926dc1..ffebe52 100644
+--- a/cpp/lera/bridge/lera_bridge.cpp
++++ b/cpp/lera/bridge/lera_bridge.cpp
+@@ -391,6 +391,8 @@ std::string solve_duration_json(const std::string& payload, const SolveParams& p
+     nlohmann::json result;
+     result["effective_backend_settings"] = goc::ablation_backend_settings();
+     result["effective_algorithm_settings"] = {{"cut_limit", params.cut_limit}, {"cut_violation_threshold", 0.1}, {"algorithm_epsilon", 1e-6}, {"solution_limit", params.solution_limit}, {"node_limit", params.node_limit}, {"stab_alpha", params.stab_alpha}, {"ng_routes", false}};
++    result["effective_algorithm_settings"]["label_correction"] = lbl.correcting;
++    result["effective_algorithm_settings"]["lazy_extension"] = lbl.lazy_extension;
+     result["exact_log"] = log;
+     result["bound_events"] = bound_events;
+     result["closure_census"] = closure_census();
+diff --git a/cpp/lera/goc/include/goc/math/pwl_function.h b/cpp/lera/goc/include/goc/math/pwl_function.h
+index 914d6d5..92eece0 100644
+--- a/cpp/lera/goc/include/goc/math/pwl_function.h
++++ b/cpp/lera/goc/include/goc/math/pwl_function.h
+@@ -26,16 +26,20 @@ namespace goc
+ //           hold an operand back for any stacked boundary piece. These rules
+ //           are what the exact value-jump labeling needs on step-carrying
+ //           (stepwise-ATF) instances.
+-//   false = the pre-M13.0 (kayros 1.0.0) rules, which preserve only JUMP
++//   false = the pre-M13.0 (kayros 1.0.0) rules with the scalar-point addition
++//           repair, which preserve only JUMP
+ //           verticals in Compose, pair operator+ verticals by image order, and
+ //           hold back only for a boundary vertical after a non-vertical piece.
++//           Addition also retains a single nonvertical point operand across
++//           stacked CHOICE pieces at exactly the same abscissa.
+ //
+ // Why the switch exists: CHOICE verticals (from Inverse of a departure
+ // plateau) and set-valued label durations occur on JUMP-FREE instances too, so
+ // the M13.0 rules were never confined to the exact path the way M13.0 assumed.
+ // On jump-free instances they change the audited v1.0.0 arithmetic and
+-// over-certify (M13.3). The flag restores the documented intent: jump-free
+-// solves take the v1.0.0 arithmetic bit-identically.
++// over-certify (M13.3). The flag retains the legacy arithmetic on jump-free
++// solves, except for the scalar-point addition repair needed to preserve all
++// attainable departure choices on a tight connection.
+ //
+ // Process-global, defaulting to the M13.0 rules (the library semantics the goc
+ // unit tests pin). `kayros::lera::solve_duration_json` sets it per solve from
+diff --git a/cpp/lera/goc/src/math/pwl_function.cpp b/cpp/lera/goc/src/math/pwl_function.cpp
+index 99f4e9e..68ba8a8 100644
+--- a/cpp/lera/goc/src/math/pwl_function.cpp
++++ b/cpp/lera/goc/src/math/pwl_function.cpp
+@@ -840,6 +840,15 @@ bool hold_back_for_stacked_piece(const PWLFunction& f, int i, const LinearFuncti
+ PWLFunction operator+(const PWLFunction& f, const PWLFunction& g)
+ {
+     PWLFunction h;
++    // Label durations can contain stacked departure choices on jump-free
++    // inputs. At a scalar point operand, advancing after the first choice
++    // discards attainable lower durations. Keep this repair confined to legacy
++    // CHOICE-to-CHOICE tails, leaving JUMP attainment and step-mode rules intact.
++    const bool legacy = !step_exact_arithmetic();
++    const bool f_scalar_point = legacy && f.PieceCount() == 1 && !f.Piece(0).is_vertical()
++        && f.Piece(0).domain.left == f.Piece(0).domain.right;
++    const bool g_scalar_point = legacy && g.PieceCount() == 1 && !g.Piece(0).is_vertical()
++        && g.Piece(0).domain.left == g.Piece(0).domain.right;
+     int i = 0, j = 0;
+     while (i < f.PieceCount() && j < g.PieceCount())
+     {
+@@ -886,6 +895,12 @@ PWLFunction operator+(const PWLFunction& f, const PWLFunction& g)
+         // Stacked-boundary hold-back (see hold_back_for_stacked_piece above).
+         bool f_stack_next = hold_back_for_stacked_piece(f, i, pf);
+         bool g_stack_next = hold_back_for_stacked_piece(g, j, pg);
++        if (g_scalar_point && pf.is_choice_vertical() && i + 1 < f.PieceCount()
++            && f.Piece(i + 1).is_choice_vertical()
++            && f.Piece(i + 1).domain.left == pg.domain.left) f_stack_next = true;
++        if (f_scalar_point && pg.is_choice_vertical() && j + 1 < g.PieceCount()
++            && g.Piece(j + 1).is_choice_vertical()
++            && g.Piece(j + 1).domain.left == pf.domain.left) g_stack_next = true;
+         if (epsilon_equal(pf.domain.right, pg.domain.right))
+         {
+             if (f_stack_next) { ++i; }
+@@ -1110,4 +1125,4 @@ double PWLFunction::compute_area() const
+ }
+ 
+ 
+-} // namespace goc
+\ No newline at end of file
++} // namespace goc
+diff --git a/cpp/lera/main/include/bcp/branch_trace.h b/cpp/lera/main/include/bcp/branch_trace.h
+new file mode 100644
+index 0000000..195cb04
+--- /dev/null
++++ b/cpp/lera/main/include/bcp/branch_trace.h
+@@ -0,0 +1,88 @@
++#pragma once
++
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <stdexcept>
++
++namespace solver
++{
++// A first-branch diagnostic. With no environment path this does no IO.
++// The file is exclusive and flushed before any strong-branching probe.
++class FirstBranchTrace
++{
++public:
++    FirstBranchTrace()
++    {
++        static bool claimed = false;
++        const char* path = std::getenv("KAYROS_FIRST_BRANCH_TRACE");
++        if (path == nullptr || *path == '\0' || claimed) return;
++        claimed = true;
++        stream_ = std::fopen(path, "wx");
++        if (stream_ == nullptr) throw std::runtime_error("Cannot exclusively create first-branch trace");
++    }
++
++    ~FirstBranchTrace() { if (stream_) std::fclose(stream_); }
++    FirstBranchTrace(const FirstBranchTrace&) = delete;
++    FirstBranchTrace& operator=(const FirstBranchTrace&) = delete;
++    explicit operator bool() const { return stream_ != nullptr; }
++
++    template<class Arcs, class Matrix, class Valuation>
++    void Begin(int node, double bound, const Arcs& canonical, const Matrix& x,
++               const Arcs& legacy, const Matrix& raw_x, const Valuation& raw)
++    {
++        std::fprintf(stream_, "{\"event\":\"first_branch_begin\",\"node\":%d,\"bound\":", node);
++        Number(bound);
++        std::fprintf(stream_, ",\"raw_valuation_order\":[");
++        bool comma = false;
++        for (const auto& item : raw)
++        {
++            if (comma) std::fprintf(stream_, ",");
++            comma = true;
++            std::fprintf(stream_, "[%d,", item.first.Index());
++            Number(item.second);
++            std::fprintf(stream_, "]");
++        }
++        std::fprintf(stream_, "],\"canonical_candidates\":[");
++        Candidates(canonical, x);
++        std::fprintf(stream_, "],\"legacy_order_candidates\":[");
++        Candidates(legacy, raw_x);
++        std::fprintf(stream_, "]}\n");
++        std::fflush(stream_);
++    }
++
++    void Finish(int tail, int head, double estimate)
++    {
++        if (!stream_) return;
++        std::fprintf(stream_, "{\"event\":\"first_branch_selected\",\"tail\":%d,\"head\":%d,\"estimate\":", tail, head);
++        Number(estimate);
++        std::fprintf(stream_, "}\n");
++        std::fflush(stream_);
++    }
++
++private:
++    void Number(double value)
++    {
++        if (std::isfinite(value)) std::fprintf(stream_, "%.17g", value);
++        else std::fprintf(stream_, "null");
++    }
++
++    template<class Arcs, class Matrix>
++    void Candidates(const Arcs& arcs, const Matrix& x)
++    {
++        bool comma = false;
++        for (const auto& arc : arcs)
++        {
++            if (comma) std::fprintf(stream_, ",");
++            comma = true;
++            std::fprintf(stream_, "{\"tail\":%d,\"head\":%d,\"fraction\":", arc.tail, arc.head);
++            Number(x[arc.tail][arc.head]);
++            std::fprintf(stream_, ",\"distance_from_half\":");
++            Number(std::fabs(0.5 - x[arc.tail][arc.head]));
++            std::fprintf(stream_, "}");
++        }
++    }
++
++    std::FILE* stream_ = nullptr;
++};
++} // namespace solver
+diff --git a/cpp/lera/main/include/bcp/ordered_valuation.h b/cpp/lera/main/include/bcp/ordered_valuation.h
+new file mode 100644
+index 0000000..9f692e3
+--- /dev/null
++++ b/cpp/lera/main/include/bcp/ordered_valuation.h
+@@ -0,0 +1,21 @@
++#pragma once
++
++#include <algorithm>
++#include <utility>
++#include <vector>
++
++#include "goc/linear_programming/model/valuation.h"
++
++namespace solver
++{
++// Variable identity hashes contain allocation addresses. Numerical reductions
++// instead visit the current formulation columns in a reproducible order.
++inline std::vector<std::pair<goc::Variable, double>> ordered_valuation(const goc::Valuation& valuation)
++{
++    std::vector<std::pair<goc::Variable, double>> values(valuation.begin(), valuation.end());
++    std::sort(values.begin(), values.end(), [](const auto& left, const auto& right) {
++        return left.first.Index() < right.first.Index();
++    });
++    return values;
++}
++} // namespace solver
+diff --git a/cpp/lera/main/include/labeling/bidirectional_labeling.h b/cpp/lera/main/include/labeling/bidirectional_labeling.h
+index db06db3..734ad72 100644
+--- a/cpp/lera/main/include/labeling/bidirectional_labeling.h
++++ b/cpp/lera/main/include/labeling/bidirectional_labeling.h
+@@ -58,6 +58,9 @@ public:
+ 	);
+ 	
+ private:
++	friend struct CorrectionInvariantTest;
++	void RefreshCorrectedMergeLabels(int direction);
++
+ 	// Sets the labeling level flags based on the given level.
+ 	void setup_labeling_level_flag(
+ 		LabelingLevel level
+diff --git a/cpp/lera/main/include/labeling/monodirectional_labeling.h b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+index c9c06fb..0cc5b86 100644
+--- a/cpp/lera/main/include/labeling/monodirectional_labeling.h
++++ b/cpp/lera/main/include/labeling/monodirectional_labeling.h
+@@ -74,6 +74,14 @@ public:
+ 	LazyLabel Init() const;
+ 	
+ private:
++	friend class BidirectionalLabeling;
++	friend struct CorrectionInvariantTest;
++	// Removed labels can remain parents of queued or processed labels.
++	// Retain their ownership until the whole pricing call is cleaned.
++	std::vector<Label*> retired_labels_;
++	// Correction changes keys shared with the bidirectional merge index.
++	std::vector<std::pair<goc::Vertex, nyr::CapacityUnit>> corrected_merge_buckets_;
++
+ 	// The extension step consists in taking a lazy label and building the complete label.
+ 	// Returns: the extended full label (notice that it may be infeasible, so it may be nullptr).
+ 	Label* ExtensionStep(const LazyLabel& ll) const;
+diff --git a/cpp/lera/main/src/bcp/bcp.cpp b/cpp/lera/main/src/bcp/bcp.cpp
+index ae9e67b..17c4f88 100644
+--- a/cpp/lera/main/src/bcp/bcp.cpp
++++ b/cpp/lera/main/src/bcp/bcp.cpp
+@@ -5,6 +5,8 @@
+ //
+ 
+ #include "bcp/bcp.h"
++#include "bcp/branch_trace.h"
++#include "bcp/ordered_valuation.h"
+ 
+ #include <climits>
+ 
+@@ -288,7 +290,7 @@ void BCP::BranchNode(Node* node)
+ 	
+ 	// Calculate z[x_ij] values.
+ 	Matrix<double> x(D.NbVertices(), D.NbVertices(), 0.0);
+-	for (auto& y_val: node->opt)
++	for (const auto& y_val: ordered_valuation(node->opt))
+ 	{
+ 		auto& r = spf->RouteOf(y_val.first);
+ 		for (int k = 1; k < (int)r.path.size()-2; ++k) x[r.path[k]][r.path[k+1]] += y_val.second;
+@@ -302,9 +304,33 @@ void BCP::BranchNode(Node* node)
+ 			x_most.push_back(e);
+ 	sort(x_most.begin(), x_most.end(), [&] (Arc e, Arc f) { return fabs(0.5-x[e.tail][e.head]) < fabs(0.5-x[f.tail][f.head]); });
+ 	while (x_most.size() > STRONG_BRANCH_SIZE) x_most.pop_back();
++
++    FirstBranchTrace branch_trace;
++    if (branch_trace)
++    {
++        Matrix<double> raw_x(D.NbVertices(), D.NbVertices(), 0.0);
++        for (const auto& y_val : node->opt)
++        {
++            const auto& route = spf->RouteOf(y_val.first);
++            for (int k = 1; k < (int) route.path.size() - 2; ++k)
++                raw_x[route.path[k]][route.path[k + 1]] += y_val.second;
++        }
++        vector<Arc> legacy_candidates;
++        for (Arc arc : D.Arcs())
++            if (epsilon_bigger(raw_x[arc.tail][arc.head], 0.0)
++                    && epsilon_smaller(raw_x[arc.tail][arc.head], 1.0))
++                legacy_candidates.push_back(arc);
++        sort(legacy_candidates.begin(), legacy_candidates.end(), [&](Arc a, Arc b) {
++            return fabs(0.5 - raw_x[a.tail][a.head]) < fabs(0.5 - raw_x[b.tail][b.head]);
++        });
++        while (legacy_candidates.size() > STRONG_BRANCH_SIZE) legacy_candidates.pop_back();
++        branch_trace.Begin(node->index, node->bound, x_most, x, legacy_candidates, raw_x, node->opt);
++    }
+ 	
+ 	// Calculate all candidate estimate bounds and keep the best one.
+ 	vector<Node> best_candidate;
++    int selected_tail = -1, selected_head = -1;
++    double selected_estimate = -INFTY;
+     int selected_infeasible = 0;
+     if (x_most.empty()) ++unbranched_fractional_count;
+ 	if (!x_most.empty())
+@@ -332,6 +358,9 @@ void BCP::BranchNode(Node* node)
+ 			if (min(left.bound, right.bound) > best_estimate)
+ 			{
+ 				best_estimate = min(left.bound, right.bound);
++                selected_tail = e.tail;
++                selected_head = e.head;
++                selected_estimate = best_estimate;
+ 				best_candidate = {};
+                 selected_infeasible = int(left.rmp_infeasible) + int(right.rmp_infeasible);
+ 				if (left.bound < INFTY) best_candidate.push_back(left);
+@@ -340,6 +369,7 @@ void BCP::BranchNode(Node* node)
+ 		}
+ 	}
+ 	
++    branch_trace.Finish(selected_tail, selected_head, selected_estimate);
+     if (log.status == BCStatus::DidNotStart) selected_rmp_infeasible_count += selected_infeasible;
+ 	*log.branching_time += rolex_branch.Pause();
+ 	// Process new children to the queue.
+@@ -374,7 +404,7 @@ bool BCP::SeparateCuts(const Valuation& z)
+ 	// Parse basis variables.
+ 	vector<VertexSet> z_visited; // z_visited[i] = vertices visited by basis variable i.
+ 	vector<double> z_values; // z_values[i] = value of basis variable i.
+-	for (auto& y_val: z)
++	for (const auto& y_val: ordered_valuation(z))
+ 	{
+ 		auto route = spf->RouteOf(y_val.first);
+ 		z_visited.push_back(create_bitset<MAX_N>(route.path));
+@@ -408,4 +438,4 @@ bool BCP::SeparateCuts(const Valuation& z)
+ 	if (epsilon_bigger(best_violation, 0.1)) spf->AddCut(best);
+ 	return epsilon_bigger(best_violation, 0.1);
+ }
+-} // namespace
+\ No newline at end of file
++} // namespace
+diff --git a/cpp/lera/main/src/labeling/bidirectional_labeling.cpp b/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
+index 3170e81..173f6de 100644
+--- a/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/bidirectional_labeling.cpp
+@@ -9,7 +9,10 @@
+ #include "bcp/pricing_problem.h"
+ 
+ #include <climits>
++#include <algorithm>
+ #include <cstdlib>
++#include <stdexcept>
++#include <string>
+ 
+ #include "labeling/trace.h"
+ 
+@@ -190,7 +193,8 @@ BidirectionalLabeling::BidirectionalLabeling(
+ 	lbl_[0].cross = false, lbl_[1].cross = true;
+ 	partial = limited_extension = lazy_extension = unreachable_strengthened = sort_by_cost = true;
+ 	elementary_check_relaxation = cost_check_relaxation = ng_routes_relaxation = false;
+-	correcting = false;
++	// Experimental candidate. Native callers can explicitly disable correction.
++	correcting = true;
+ 	// M5.9: `symmetric` was NEVER initialized (upstream set it from the
+ 	// experiment JSON, e.g. bpc_lera.json: false; the vendoring dropped that
+ 	// wiring), so line ~172 read an indeterminate value: per-binary-
+@@ -253,6 +257,9 @@ BLBExecutionLog BidirectionalLabeling::Run(
+     std::vector<Route>* R,
+     LabelingLevel level
+ ) {
++	if (correcting && !lazy_extension)
++		throw std::invalid_argument("Label correction requires lazy extension");
++
+ 	// Clean solution pool.
+ 	S.clear();
+ 	S_paths.clear(); // M13.0 path-keyed pool (step-carrying instances)
+@@ -320,11 +327,20 @@ BLBExecutionLog BidirectionalLabeling::Run(
+ 			if (MemoryMonitor::Exceeded()) { log.status = BLBStatus::MemoryLimitReached; break; }
+ 			lbl_[d].time_limit = time_limit - rolex.Peek(); // Set time limit.
+ 			auto P = lbl_[d].Run(&q[d], mlb_log[d]);
++			if (correcting)
++			{
++				merge_rolex.Reset().Resume();
++				RefreshCorrectedMergeLabels(d);
++				*log.merge_time += merge_rolex.Pause();
++			}
+ 			
+ 			// If iterative-merge is enabled, then add the labels to the structure.
+ 			if (!closing_state)
+ 				for (Label* l: P)
++				{
++					if (correcting && l->duration.Empty()) continue;
+ 					insert_sorted(M[d][l->v].Insert(floor(l->q), {}), l, [] (Label* l, Label* m) { return l->min_cost < m->min_cost; });
++				}
+ 			
+ 			// If iterative-merge is enabled, then try to merge.
+ 			if (!closing_state && log.forward_log->processed_count >= merge_start)
+@@ -414,8 +430,32 @@ BLBExecutionLog BidirectionalLabeling::Run(
+ 	return log;
+ }
+ 
++void BidirectionalLabeling::RefreshCorrectedMergeLabels(int direction)
++{
++	auto& changed = lbl_[direction].corrected_merge_buckets_;
++	if (!closing_state)
++	{
++		std::sort(changed.begin(), changed.end());
++		changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
++		for (const auto& [vertex, demand] : changed)
++			for (auto& entry : M[direction][vertex])
++			{
++				if (entry.first < demand) continue;
++				if (entry.first > demand) break;
++				auto& labels = entry.second;
++				labels.erase(std::remove_if(labels.begin(), labels.end(),
++					[](Label* label) { return label->duration.Empty(); }), labels.end());
++				std::stable_sort(labels.begin(), labels.end(),
++					[](Label* a, Label* b) { return a->min_cost < b->min_cost; });
++				break;
++			}
++	}
++	changed.clear();
++}
++
+ void BidirectionalLabeling::IterativeMerge(Label* l, const MonodirectionalLabeling::DominanceStructure& L)
+ {
++	if (correcting && l->duration.Empty()) return;
+ 	TimeUnit T = vrp_.T;
+ 	for (auto& demand_entry : L[l->v])
+ 	{
+@@ -448,6 +488,7 @@ void BidirectionalLabeling::LastArcMerge(LBQueue& qf, const MonodirectionalLabel
+ 		LazyLabel ll = qf.top();
+ 		qf.pop();
+ 		Label* l = ll.parent;
++		if (correcting && l->duration.Empty()) continue;
+ 		if (pool_size() >= solution_limit) continue;
+ 		
+ 		// M13.0 trace: is this pop the merge target's frontier arc?
+@@ -494,6 +535,7 @@ void BidirectionalLabeling::LastArcMerge(LBQueue& qf, const MonodirectionalLabel
+ 
+ void BidirectionalLabeling::Merge(Label* l, Label* m)
+ {
++	if (correcting && (l->duration.Empty() || m->duration.Empty())) return;
+ 	TimeUnit T = vrp_.T;
+ 
+ 	// M13.0 trace: full arithmetic of the witness pair's merge attempt.
+@@ -621,4 +663,4 @@ void BidirectionalLabeling::setup_labeling_level_flag(
+             break;
+     }
+ }
+-} // namespace
+\ No newline at end of file
++} // namespace
+diff --git a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+index 8dddf33..6714d11 100644
+--- a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+@@ -7,6 +7,8 @@
+ #include "labeling/monodirectional_labeling.h"
+ 
+ #include <climits>
++#include <algorithm>
++#include <stdexcept>
+ 
+ #include "labeling/pwl_domination_function.h"
+ #include "labeling/trace.h"
+@@ -113,7 +115,7 @@ MonodirectionalLabeling::MonodirectionalLabeling(
+ 	const std::optional<TDNGRoutesParams>& ng_params
+ ): 
+ 	vrp_(vrp), 
+-	correcting(false),
++	correcting(true),
+ 	// Create neignborhoods if ng_params are given.
+ 	ng(ng_params ? std::make_optional<TDNGNeighborhoods>(vrp, ng_params->partitioned_horizon, ng_params->nb_neighbors_to_keep) : std::nullopt)
+ {
+@@ -159,6 +161,9 @@ vector<Label*> MonodirectionalLabeling::Run(
+ 	LBQueue* q, 
+ 	MLBExecutionLog* log
+ ) {
++	if (correcting && !lazy_extension)
++		throw std::invalid_argument("Label correction requires lazy extension");
++
+ 	// Use rolex to measure whole run time, and rolex2 to measure steps time.
+ 	Stopwatch rolex(true), rolex2(false);
+ 	vector<Label*> P; // Processed labels.
+@@ -205,14 +210,6 @@ vector<Label*> MonodirectionalLabeling::Run(
+ 			continue;
+ 		} // Label is dominated, ignore.
+ 		
+-		// Correct existing labels.
+-		if (correcting)
+-		{
+-			rolex2.Reset().Resume();
+-			*log->corrected_count += CorrectionStep(l);
+-			*log->correction_time += rolex2.Pause();
+-		}
+-		
+ 		// If min(rw(l)) > t_m, then l should not be extended and ll should have been preserved in the queue with the
+ 		// new makespan.
+ 		if (!cross && epsilon_bigger(min(l->rw), t_m))
+@@ -221,6 +218,14 @@ vector<Label*> MonodirectionalLabeling::Run(
+ 			delete l;
+ 			continue;
+ 		}
++
++		// Only a label retained for processing may correct stored labels.
++		if (correcting)
++		{
++			rolex2.Reset().Resume();
++			*log->corrected_count += CorrectionStep(l);
++			*log->correction_time += rolex2.Pause();
++		}
+ 		
+ 		// Otherwise, label l should be processed and extended.
+ 		// Process label.
+@@ -257,6 +262,9 @@ vector<Label*> MonodirectionalLabeling::Run(
+ 
+ LazyLabel MonodirectionalLabeling::Init() const
+ {
++	if (correcting && !lazy_extension)
++		throw std::invalid_argument("Label correction requires lazy extension");
++
+ 	LazyLabel ll = {(Label*) &no_label, vrp_.o, vrp_.tw[vrp_.o].left};
+ 	if (!lazy_extension) ll.extension = ExtensionStep(ll);
+ 	return ll;
+@@ -476,11 +484,13 @@ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ 
+ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ {
++	if (cost_check_relaxation) return 0;
+ 	int removed = 0;
+ 	for (auto it_d = U[m->v].rbegin(); it_d != U[m->v].rend(); ++it_d)
+ 	{
+ 		auto& demand_entry = *it_d;
+ 		if (epsilon_smaller(demand_entry.first, m->q)) break;
++		bool changed_cost = false;
+ 		for (int j = 0; j < demand_entry.second.size(); ++j)
+ 		{
+ 			Label* l = demand_entry.second[j];
+@@ -493,20 +503,31 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 				PWLDominationFunction Delta(l->duration);
+ 				if (partial)
+ 				{
++					const double previous_cost = l->min_cost;
+ 					Delta.DominatePieces(m->duration, theta);
+ 					l->duration = normalize_pwl((PWLFunction) Delta); // kayros (M5.7)
+ 					l->rw = l->duration.Domain();
+ 					l->min_cost = min(img(l->duration)) - l->p - l->cut_cost;
++					changed_cost |= l->min_cost != previous_cost;
+ 				}
+ 				if ((!partial && Delta.IsAlwaysDominated(m->duration, theta)) || (partial && l->duration.Empty()))
+ 				{
+ 					// If l is fully dominated, remove.
++					retired_labels_.push_back(l);
+ 					demand_entry.second.erase(demand_entry.second.begin()+j);
+ 					--j;
+ 					++removed;
+ 				}
+ 			}
+ 		}
++		if (changed_cost)
++		{
++			// Subsequent labels consult U before this batch returns.
++			if (sort_by_cost)
++				std::stable_sort(demand_entry.second.begin(), demand_entry.second.end(),
++					[&](Label* a, Label* b) { return alpha(a, partial) < alpha(b, partial); });
++			corrected_merge_buckets_.emplace_back(m->v, demand_entry.first);
++		}
+ 	}
+ 	return removed;
+ }
+@@ -552,6 +573,9 @@ void MonodirectionalLabeling::Clean()
+ 		for (auto& entry_2: entry)
+ 			for (Label* m: entry_2.second)
+ 				delete m;
++	for (Label* label: retired_labels_) delete label;
++	retired_labels_.clear();
++	corrected_merge_buckets_.clear();
+ 	U = vector<DemandLevel>(vrp_.D.NbVertices());
+ }
+-} // solver
+\ No newline at end of file
++} // solver
+diff --git a/tests/cpp/test_label_correction.cpp b/tests/cpp/test_label_correction.cpp
+new file mode 100644
+index 0000000..651142b
+--- /dev/null
++++ b/tests/cpp/test_label_correction.cpp
+@@ -0,0 +1,255 @@
++#include <goc/goc.h>
++#include <nyr/nyr.h>
++
++#include <iostream>
++#include <optional>
++#include <stdexcept>
++#include <string>
++
++#include "labeling/bidirectional_labeling.h"
++
++using namespace goc;
++using namespace nyr;
++using namespace solver;
++
++namespace solver {
++struct CorrectionInvariantTest {
++    static MonodirectionalLabeling& Mono(BidirectionalLabeling& solver) { return solver.lbl_[0]; }
++    static int Correct(MonodirectionalLabeling& solver, Label* label) { return solver.CorrectionStep(label); }
++    static bool Dominated(MonodirectionalLabeling& solver, Label* label) { return solver.DominationStep(label); }
++    static Label* Extend(MonodirectionalLabeling& solver, const LazyLabel& label) { return solver.ExtensionStep(label); }
++    static std::size_t Retired(MonodirectionalLabeling& solver) { return solver.retired_labels_.size(); }
++    static std::size_t Changes(MonodirectionalLabeling& solver) { return solver.corrected_merge_buckets_.size(); }
++    static void ConfigureDelayedExtension(MonodirectionalLabeling& solver) {
++        solver.pp_.P = std::vector<double>(5, 0.0);
++        solver.vrp_.D.AddArc({0, 1});
++        solver.vrp_.q[1] = 1.0;
++        solver.vrp_.tau[0][1] = solver.vrp_.pretau[0][1] = PWLFunction::ConstantFunction(0.0, {0.0, 10.0});
++        solver.vrp_.arr[0][1] = solver.vrp_.dep[0][1] = PWLFunction::IdentityFunction({0.0, 10.0});
++        solver.vrp_.LDT = Matrix<double>(5, 5, 10.0);
++    }
++    static void Refresh(BidirectionalLabeling& solver) { solver.RefreshCorrectedMergeLabels(0); }
++    static auto& Pool(BidirectionalLabeling& solver) {
++        if (solver.M[0].empty()) solver.M[0].resize(5);
++        return solver.M[0][1].Insert(1, {});
++    }
++    static std::size_t MergePool(BidirectionalLabeling& solver, Label* label) {
++        solver.pp_.P = std::vector<double>(5, 0.0);
++        solver.S.clear();
++        solver.IterativeMerge(label, solver.M[0]);
++        return solver.S.size();
++    }
++    static void Clean(BidirectionalLabeling& solver) {
++        solver.M[0].clear();
++        solver.lbl_[0].Clean();
++    }
++};
++}
++
++void require(bool condition, const char* message) {
++    if (!condition) throw std::runtime_error(message);
++}
++
++VRPInstance instance() {
++    VRPInstance vrp;
++    vrp.D = Digraph(5);
++    vrp.o = 0;
++    vrp.d = 4;
++    vrp.T = 10;
++    vrp.horizon = {0.0, 10.0};
++    vrp.Q = 100;
++    vrp.q = std::vector<double>(5, 0.0);
++    vrp.tw = std::vector<goc::Interval>(5, {0.0, 10.0});
++    vrp.tau = Matrix<PWLFunction>(5, 5);
++    vrp.pretau = Matrix<PWLFunction>(5, 5);
++    vrp.arr = Matrix<PWLFunction>(5, 5);
++    vrp.dep = Matrix<PWLFunction>(5, 5);
++    vrp.LDT = Matrix<double>(5, 5);
++    vrp.tau[0][0] = PWLFunction::ConstantFunction(0.0, {0.0, 10.0});
++    return vrp;
++}
++
++void initialize(Label& label, PWLFunction duration, VertexSet unreachable) {
++    label.parent = nullptr;
++    label.v = 1;
++    label.q = 1;
++    label.p = label.cut_cost = 0;
++    label.duration = duration;
++    label.rw = duration.Domain();
++    label.min_cost = std::min(img(duration));
++    label.U = unreachable;
++}
++
++template <typename Function>
++void require_eager_rejection(Function operation) {
++    bool rejected = false;
++    try {
++        operation();
++    } catch (const std::invalid_argument& error) {
++        rejected = std::string(error.what()) == "Label correction requires lazy extension";
++    }
++    require(rejected, "Correction with eager extension must be rejected explicitly");
++}
++
++void check_default_and_eager_guard(bool step_exact) {
++    StepExactArithmeticScope arithmetic(step_exact);
++    const std::optional<TDNGRoutesParams> ng = std::nullopt;
++    BidirectionalLabeling bidirectional(instance(), ng);
++    MonodirectionalLabeling mono(instance(), ng);
++    require(bidirectional.correcting && mono.correcting,
++            "Experimental candidate must enable correction by default");
++    require(bidirectional.lazy_extension && mono.lazy_extension,
++            "Experimental candidate must preserve the default lazy extension mode");
++    mono.Init();
++    LBQueue queue;
++    MLBExecutionLog log(true);
++    require(mono.Run(&queue, &log).empty(), "Default lazy mode must allow an empty queue");
++    mono.lazy_extension = false;
++    require_eager_rejection([&] { mono.Init(); });
++    require_eager_rejection([&] { mono.Run(&queue, &log); });
++    bidirectional.lazy_extension = false;
++    PricingProblem problem;
++    std::vector<Route> routes;
++    require_eager_rejection([&] { bidirectional.Run(problem, &routes, LabelingLevel::Exact); });
++    require(queue.empty() && routes.empty(), "Rejected modes must not mutate output queues or routes");
++    mono.correcting = bidirectional.correcting = false;
++    require(!mono.correcting && !bidirectional.correcting,
++            "Native callers must retain an explicit correction-off control");
++    require(mono.Run(&queue, &log).empty(), "Correction-off eager mode must not trigger the correction guard");
++}
++
++void check(bool step_exact, bool sort_by_cost) {
++    StepExactArithmeticScope arithmetic(step_exact);
++    const std::optional<TDNGRoutesParams> ng = std::nullopt;
++    BidirectionalLabeling bidirectional(instance(), ng);
++    require(bidirectional.correcting, "Experimental candidate must enable correction by default");
++    bidirectional.correcting = true;
++    bidirectional.closing_state = false;
++    auto& mono = CorrectionInvariantTest::Mono(bidirectional);
++    mono.correcting = true;
++    mono.sort_by_cost = sort_by_cost;
++    VertexSet a, b;
++    a.set(1).set(2).set(4);
++    b.set(1).set(3).set(4);
++    auto* first = new Label;
++    auto* second = new Label;
++    PWLFunction rising;
++    rising.AddPiece(LinearFunction({0.0, 0.0}, {10.0, 5.0}));
++    initialize(*first, rising, a);
++    initialize(*second, PWLFunction::ConstantFunction(0.5, {0.0, 10.0}), b);
++    auto& bucket = mono.U[1].Insert(1, {});
++    bucket = {first, second};
++    CorrectionInvariantTest::Pool(bidirectional) = {first, second};
++    Label arriving;
++    initialize(arriving, PWLFunction::ConstantFunction(0.0, {0.0, 1.0}), a);
++    require(CorrectionInvariantTest::Correct(mono, &arriving) == 0, "Expected partial correction only");
++    require(first->min_cost == 1.0, "Expected partial correction to increase the minimum cost");
++    require(bucket[0] == (sort_by_cost ? second : first),
++            "Correction must repair the dominance order only when that order is enabled");
++    Label query;
++    initialize(query, PWLFunction::ConstantFunction(0.75, {0.0, 10.0}), b);
++    require(CorrectionInvariantTest::Dominated(mono, &query), "Corrected index must retain a valid dominator");
++    require(CorrectionInvariantTest::Changes(mono) == 1, "Changed merge bucket must be recorded");
++    CorrectionInvariantTest::Refresh(bidirectional);
++    require(CorrectionInvariantTest::Changes(mono) == 0, "Merge refresh must drain changed buckets");
++    require(CorrectionInvariantTest::Pool(bidirectional)[0] == second,
++            "Merge refresh must repair min-cost ordering before early breaks");
++
++    Label null_forward, start, forward, null_backward, end, middle_first, middle_second;
++    null_forward.parent = null_backward.parent = nullptr;
++    start.parent = &null_forward;
++    start.v = 0;
++    start.cut_cost = 0;
++    initialize(forward, PWLFunction::ConstantFunction(0.0, {0.0, 10.0}), {});
++    forward.parent = &start;
++    forward.p = 0.75;
++    forward.min_cost = -0.75;
++    forward.S.set(0).set(1);
++    end.parent = &null_backward;
++    end.v = 4;
++    middle_first.parent = middle_second.parent = &end;
++    middle_first.v = 2;
++    middle_second.v = 3;
++    first->parent = &middle_first;
++    second->parent = &middle_second;
++    first->S = a;
++    second->S = b;
++    require(CorrectionInvariantTest::MergePool(bidirectional, &forward) == 1,
++            "Repaired merge index must retain the negative-cost route");
++    CorrectionInvariantTest::Clean(bidirectional);
++
++    for (bool partial : {true, false}) {
++        mono.partial = partial;
++        auto* retired = new Label;
++        initialize(*retired, PWLFunction::ConstantFunction(1.0, {0.0, 10.0}), a);
++        mono.U[1].Insert(1, {}).push_back(retired);
++        CorrectionInvariantTest::Pool(bidirectional) = {retired};
++        initialize(arriving, PWLFunction::ConstantFunction(0.0, {0.0, 10.0}), a);
++        require(CorrectionInvariantTest::Correct(mono, &arriving) == 1, "Expected full correction");
++        require(CorrectionInvariantTest::Retired(mono) == 1, "Removed parent must retain ownership until cleanup");
++        if (partial) {
++            require(retired->duration.Empty(), "Fully corrected duration must be empty");
++            LazyLabel child{retired, 2, 0.0};
++            require(CorrectionInvariantTest::Extend(mono, child) == nullptr,
++                    "Lazy child must safely reject its live empty parent");
++            CorrectionInvariantTest::Refresh(bidirectional);
++            require(CorrectionInvariantTest::Pool(bidirectional).empty(),
++                    "Merge index must remove empty corrected labels");
++            require(CorrectionInvariantTest::MergePool(bidirectional, retired) == 0,
++                    "Empty forward merge label must be ignored");
++        } else {
++            require(!retired->duration.Empty(), "Full-only correction must preserve its existing valid duration semantics");
++        }
++        CorrectionInvariantTest::Clean(bidirectional);
++        require(CorrectionInvariantTest::Retired(mono) == 0, "Cleanup must release retired owners");
++    }
++
++    // A lazy queue key can predate partial correction of its parent's domain.
++    // Defer the resulting extension and resume it after moving the middle.
++    mono.partial = true;
++    mono.cross = false;
++    mono.lazy_extension = true;
++    mono.limited_extension = false;
++    mono.t_m = 5.0;
++    CorrectionInvariantTest::ConfigureDelayedExtension(mono);
++    auto* existing = new Label;
++    VertexSet old_unreachable = a;
++    old_unreachable.set(0);
++    initialize(*existing, PWLFunction::ConstantFunction(1.0, {8.0, 10.0}), old_unreachable);
++    mono.U[1].Insert(1, {}).push_back(existing);
++    Label parent;
++    initialize(parent, PWLFunction::ConstantFunction(0.0, {8.0, 10.0}), {});
++    parent.v = 0;
++    parent.q = 0;
++    parent.length = 0;
++    parent.S.set(0);
++    LazyLabel lazy{&parent, 1, 0.0};
++    LBQueue queue;
++    queue.push(lazy);
++    MLBExecutionLog log(true);
++    const auto processed = mono.Run(&queue, &log);
++    require(processed.empty() && !queue.empty() && queue.top().makespan == 8.0,
++            "Boundary-crossing candidate must be deferred");
++    require(CorrectionInvariantTest::Retired(mono) == 0 && !existing->duration.Empty(),
++            "A deferred candidate must not retire a stored label");
++    mono.t_m = 10.0;
++    const auto resumed = mono.Run(&queue, &log);
++    require(resumed.size() == 1 && queue.empty(), "Deferred lazy extension must resume safely");
++    require(CorrectionInvariantTest::Retired(mono) == 1 && existing->duration.Empty(),
++            "Accepted resumed label should correct the stored label");
++    CorrectionInvariantTest::Clean(bidirectional);
++}
++
++int main() {
++    try {
++        for (bool arithmetic : {false, true}) {
++            check_default_and_eager_guard(arithmetic);
++            for (bool sorting : {false, true}) check(arithmetic, sorting);
++        }
++        std::cout << "Correction defaults, eager-mode guards, ordering, negative-route retention, ownership and deferred-label checks pass in both arithmetic modes and sorting settings\n";
++        return 0;
++    } catch (const std::exception& error) {
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++}
+diff --git a/tests/cpp/test_label_correction_pricing.cpp b/tests/cpp/test_label_correction_pricing.cpp
+new file mode 100644
+index 0000000..075247f
+--- /dev/null
++++ b/tests/cpp/test_label_correction_pricing.cpp
+@@ -0,0 +1,156 @@
++#include <goc/goc.h>
++#include <nyr/nyr.h>
++
++#include <cmath>
++#include <functional>
++#include <iostream>
++#include <optional>
++#include <stdexcept>
++
++#include "labeling/bidirectional_labeling.h"
++
++using namespace goc;
++using namespace nyr;
++using namespace solver;
++
++void require(bool condition, const char* message) {
++    if (!condition) throw std::runtime_error(message);
++}
++
++double cost(int u, int v, int seed) {
++    return (u == 0 || v == 5) ? 1.0 : 1.0 + ((u * 7 + v * 3 + seed) % 4) / 4.0;
++}
++
++VRPInstance instance(int seed) {
++    VRPInstance vrp;
++    vrp.D = Digraph(6);
++    vrp.o = 0;
++    vrp.d = 5;
++    vrp.T = 20.0;
++    vrp.horizon = {0.0, vrp.T};
++    vrp.Q = 3.0;
++    vrp.q = {0.0, 1.0, 1.0, 1.0, 1.0, 0.0};
++    vrp.tw = std::vector<goc::Interval>(6, vrp.horizon);
++    vrp.time_steps = {vrp.horizon};
++    vrp.tau = vrp.pretau = vrp.arr = vrp.dep = Matrix<PWLFunction>(6, 6);
++    vrp.LDT = Matrix<double>(6, 6, -goc::INFTY);
++    for (int u = 0; u < 6; ++u) {
++        vrp.tau[u][u] = vrp.pretau[u][u] = PWLFunction::ConstantFunction(0.0, vrp.horizon);
++        vrp.arr[u][u] = vrp.dep[u][u] = PWLFunction::IdentityFunction(vrp.horizon);
++        vrp.LDT[u][u] = vrp.T;
++        for (int v = 0; v < 6; ++v) {
++            if (u == v || u == vrp.d || v == vrp.o) continue;
++            vrp.D.AddArc({u, v});
++            const double travel = cost(u, v, seed);
++            vrp.tau[u][v] = PWLFunction::ConstantFunction(travel, {0.0, vrp.T - travel});
++            vrp.arr[u][v].AddPiece(LinearFunction({0.0, travel}, {vrp.T - travel, vrp.T}));
++            vrp.dep[u][v].AddPiece(LinearFunction({travel, 0.0}, {vrp.T, vrp.T - travel}));
++            vrp.pretau[u][v] = PWLFunction::ConstantFunction(travel, {travel, vrp.T});
++            vrp.LDT[u][v] = vrp.T - travel;
++        }
++    }
++    return vrp;
++}
++
++double route_reduced_cost(const GraphPath& path, const PricingProblem& problem, int seed) {
++    require(path.size() >= 3 && path.front() == 0 && path.back() == 5,
++            "Pricing returned an invalid depot path");
++    unsigned visited = 0;
++    double value = 0.0;
++    int cut_visits = 0;
++    for (std::size_t k = 1; k < path.size(); ++k) {
++        const int u = path[k - 1], v = path[k];
++        require(!(u == 1 && v == 2), "Pricing returned a forbidden arc");
++        value += cost(u, v, seed);
++        if (v == 5) continue;
++        require(v >= 1 && v <= 4 && !(visited & (1U << v)), "Pricing returned a nonelementary path");
++        visited |= 1U << v;
++        value -= problem.P[v];
++        if (v <= 3) ++cut_visits;
++    }
++    require(path.size() - 2 <= 3, "Pricing exceeded capacity");
++    if (cut_visits >= 2) value -= problem.sigma[0];
++    return value;
++}
++
++double oracle(const PricingProblem& problem, int seed) {
++    double best = goc::INFTY;
++    GraphPath path{0};
++    std::function<void(unsigned)> visit = [&](unsigned used) {
++        if (path.size() > 1) {
++            path.push_back(5);
++            best = std::min(best, route_reduced_cost(path, problem, seed));
++            path.pop_back();
++        }
++        if (path.size() == 4) return;
++        for (int v = 1; v <= 4; ++v) {
++            if ((used & (1U << v)) || (path.back() == 1 && v == 2)) continue;
++            path.push_back(v);
++            visit(used | (1U << v));
++            path.pop_back();
++        }
++    };
++    visit(0);
++    return best;
++}
++
++int main() {
++    try {
++        int calls = 0;
++        long long corrected = 0;
++        for (bool arithmetic : {false, true}) {
++            StepExactArithmeticScope scope(arithmetic);
++            for (int seed : {0, 1}) {
++                const auto vrp = instance(seed);
++                for (bool correction : {false, true})
++                    for (bool partial : {false, true})
++                        for (bool closing : {false, true})
++                            for (bool sorting : {false, true}) {
++                                const std::optional<TDNGRoutesParams> ng = std::nullopt;
++                                BidirectionalLabeling labeling(vrp, ng);
++                                labeling.correcting = correction;
++                                labeling.partial = partial;
++                                labeling.closing_state = closing;
++                                labeling.sort_by_cost = sorting;
++                                for (bool negative : {true, false}) {
++                                    PricingProblem problem;
++                                    problem.A = {{1, 2}};
++                                    problem.P = negative ? std::vector<double>{0.0, 2.5, 2.75, 2.25, 3.0, 0.0}
++                                                         : std::vector<double>(6, 0.0);
++                                    SubsetRowCut cut;
++                                    cut.set(1).set(2).set(3);
++                                    problem.S = {cut};
++                                    problem.sigma = {-0.5};
++                                    const double expected = oracle(problem, seed);
++                                    std::vector<goc::Route> routes;
++                                    const auto log = labeling.Run(problem, &routes, LabelingLevel::Exact);
++                                    require(log.status == BLBStatus::Finished, "Tiny exact pricing must complete");
++                                    double observed = goc::INFTY;
++                                    for (const auto& route : routes) {
++                                        const double reduced = route_reduced_cost(route.path, problem, seed);
++                                        double duration = 0.0;
++                                        for (std::size_t k = 1; k < route.path.size(); ++k)
++                                            duration += cost(route.path[k-1], route.path[k], seed);
++                                        require(std::abs(route.duration - duration) < 1e-9,
++                                                "Returned duration differs from independent constant-arc sum");
++                                        require(reduced < -1e-6, "Pricing returned a nonnegative reduced-cost route");
++                                        observed = std::min(observed, reduced);
++                                    }
++                                    if (expected < -1e-6)
++                                        require(std::abs(observed - expected) < 1e-9,
++                                                "Exact pricing lost the exhaustive oracle's best negative route");
++                                    else require(routes.empty(), "Nonnegative pricing oracle requires an empty pool");
++                                    corrected += *log.forward_log->corrected_count + *log.backward_log->corrected_count;
++                                    ++calls;
++                                }
++                            }
++            }
++        }
++        require(corrected > 0, "Synthetic pricing must exercise actual full-label correction");
++        std::cout << calls << " synthetic exact-pricing oracle checks pass, corrected count " << corrected << '\n';
++        return 0;
++    } catch (const std::exception& error) {
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++}
+diff --git a/tests/cpp/test_ordered_valuation.cpp b/tests/cpp/test_ordered_valuation.cpp
+new file mode 100644
+index 0000000..6b15f9e
+--- /dev/null
++++ b/tests/cpp/test_ordered_valuation.cpp
+@@ -0,0 +1,65 @@
++#include <algorithm>
++#include <array>
++#include <bit>
++#include <cstdint>
++#include <cstdlib>
++#include <iostream>
++#include <numeric>
++#include <random>
++#include <set>
++
++#include "bcp/ordered_valuation.h"
++#include "goc/linear_programming/highs/matrix_formulation.h"
++
++static void require(bool value)
++{
++    if (!value) { std::cerr << "ordered valuation regression\n"; std::exit(1); }
++}
++
++int main()
++{
++    // Fractional values from the captured C201 root LP, including its dust.
++    const std::array<double, 23> values{
++        .05, .05, .05, .05, .05, .05, .05, .05, .05, .05,
++        .05000000000000007, .05, .05, .05, .049999999999999795,
++        .05, .050000000000000114, .05, .05, .049999999999999906,
++        .049999999999999836, 1., 1.};
++    std::mt19937 rng(58);
++    std::set<uint64_t> raw_results;
++    std::array<uint64_t, 3> expected{};
++    for (int trial = 0; trial < 128; ++trial)
++    {
++        goc::MatrixFormulation formulation;
++        std::vector<goc::Variable> variables;
++        for (int index = 0; index < (int) values.size(); ++index)
++            variables.push_back(formulation.AddVariable("y_" + std::to_string(index)));
++        std::vector<int> order(values.size());
++        std::iota(order.begin(), order.end(), 0);
++        std::shuffle(order.begin(), order.end(), rng);
++        goc::Valuation valuation;
++        for (int index : order) valuation.SetValue(variables[index], values[index]);
++        double raw = 0.;
++        for (const auto& item : valuation) raw += item.second;
++        raw_results.insert(std::bit_cast<uint64_t>(raw));
++        auto sorted = solver::ordered_valuation(valuation);
++        require(sorted.size() == values.size());
++        std::array<double, 3> sums{};
++        for (int index = 0; index < (int) sorted.size(); ++index)
++        {
++            require(sorted[index].first.Index() == index);
++            require(std::bit_cast<uint64_t>(sorted[index].second) == std::bit_cast<uint64_t>(values[index]));
++            sums[0] += sorted[index].second;
++            if (index % 3) sums[1] += sorted[index].second;
++            if (index % 2) sums[2] += sorted[index].second;
++        }
++        for (int index = 0; index < 3; ++index)
++        {
++            uint64_t bits = std::bit_cast<uint64_t>(sums[index]);
++            if (trial == 0) expected[index] = bits;
++            else require(bits == expected[index]);
++        }
++    }
++    require(raw_results.size() > 1);
++    std::cout << "PASS 128 valuation permutations, invariant canonical reductions, "
++              << raw_results.size() << " distinct raw sum bit patterns\n";
++}
+diff --git a/tests/cpp/test_point_addition.cpp b/tests/cpp/test_point_addition.cpp
+new file mode 100644
+index 0000000..545ed1e
+--- /dev/null
++++ b/tests/cpp/test_point_addition.cpp
+@@ -0,0 +1,84 @@
++#include "goc/math/pwl_function.h"
++
++#include <cmath>
++#include <iostream>
++#include <stdexcept>
++
++namespace {
++void require(bool condition, const char* message)
++{
++    if (!condition) throw std::runtime_error(message);
++}
++
++goc::PWLFunction choices()
++{
++    goc::PWLFunction f;
++    f.AddPiece(goc::LinearFunction({770.0, 62.6125}, {770.0, 50.425}).as_choice_vertical());
++    f.AddPiece(goc::LinearFunction({770.0, 50.425}, {770.0, 50.0}).as_choice_vertical());
++    f.AddPiece(goc::LinearFunction({770.0, 50.0}, {770.0, 41.0272189349112}).as_choice_vertical());
++    f.AddPiece(goc::LinearFunction({770.0, 41.0272189349112}, {771.0, 41.1195266272189}));
++    return f;
++}
++
++void check(bool step_exact)
++{
++    goc::StepExactArithmeticScope scope(step_exact);
++    const auto f = choices();
++    const auto travel = goc::PWLFunction::ConstantFunction(19.0, {770.0, 770.0});
++    const auto departure = goc::PWLFunction::ConstantFunction(770.0, {789.0, 789.0});
++    const double expected = f.MinValueAt(770.0) + 19.0;
++    for (const auto& sum : {f + travel, travel + f})
++    {
++        require(sum.Domain().left == 770.0 && sum.Domain().right == 770.0,
++                "A scalar point must restrict the sum to its abscissa");
++        require(std::abs(sum.MinValueAt(770.0) - expected) < 1e-10,
++                "Adding a scalar point lost an attainable departure choice");
++        const auto extended = sum.Compose(departure);
++        require(std::abs(extended.MinValueAt(789.0) - expected) < 1e-10,
++                "Tight-arc extension must retain the best prefix duration");
++    }
++    const auto outside = goc::PWLFunction::ConstantFunction(19.0, {772.0, 772.0});
++    require((f + outside).Empty() && (outside + f).Empty(),
++            "A disjoint point must not create a new feasible time");
++    const auto ordinary = goc::PWLFunction::ConstantFunction(2.0, {0.0, 4.0});
++    const auto point = goc::PWLFunction::ConstantFunction(3.0, {4.0, 4.0});
++    require((ordinary + point).MinValueAt(4.0) == 5.0,
++            "Ordinary scalar-point addition must remain unchanged");
++
++    goc::PWLFunction boundary;
++    boundary.AddPiece(goc::LinearFunction({760.0, 43.0}, {770.0, 43.0}));
++    boundary.AddPiece(goc::LinearFunction({770.0, 43.0}, {770.0, 41.0}).as_choice_vertical());
++    for (const auto& sum : {boundary + travel, travel + boundary})
++        require(sum.MinValueAt(770.0) == 60.0,
++                "An ordinary segment followed by a boundary choice must retain the choice");
++
++    goc::PWLFunction jump;
++    jump.AddPiece(goc::LinearFunction({0.0, 2.0}, {1.0, 2.0}));
++    jump.AddPiece(goc::LinearFunction({1.0, 2.0}, {1.0, 8.0}));
++    jump.AddPiece(goc::LinearFunction({1.0, 8.0}, {2.0, 8.0}));
++    const auto at_jump = goc::PWLFunction::ConstantFunction(3.0, {1.0, 1.0});
++    for (const auto& sum : {jump + at_jump, at_jump + jump})
++    {
++        require(sum.PieceCount() == 2 && sum.Piece(1).is_jump_vertical(),
++                "The point-choice repair must leave the unrelated JUMP sweep unchanged");
++        require(sum.Value(1.0) == 5.0,
++                "The attained side of an unrelated JUMP must remain unchanged");
++    }
++}
++}
++
++int main()
++{
++    try
++    {
++        check(false);
++        check(true);
++        std::cout << "Point-addition and tight-extension invariants pass in legacy and step-exact modes\n";
++        return 0;
++    }
++    catch (const std::exception& error)
++    {
++        std::cerr << error.what() << '\n';
++        return 1;
++    }
++}

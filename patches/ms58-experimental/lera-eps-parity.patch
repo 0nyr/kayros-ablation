@@ -1,0 +1,13 @@
+diff --git a/code/goc/include/goc/math/number_utils.h b/code/goc/include/goc/math/number_utils.h
+index 2c044d8..fdcbe5f 100644
+--- a/code/goc/include/goc/math/number_utils.h
++++ b/code/goc/include/goc/math/number_utils.h
+@@ -14,7 +14,7 @@
+ namespace goc
+ {
+ // Constant that represents the minimum granularity to be taken into account to compare numbers.
+-const double EPS = 10e-6;
++const double EPS = 10e-7;
+ // Constant representing a number that is bigger than the numbers that will be used.
+ const double INFTY = 10e50;
+ 
