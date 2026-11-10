@@ -1,0 +1,49 @@
+{
+  "schema": "ms58-u-filter-opportunity-pilot-template-v1",
+  "purpose": "Sampled rejection coverage, no runtime benefit or throughput claim",
+  "sources": {
+    "correction-on": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+    "dominance-profile": "7d68859e8d6d8b8ae2382c1f7a88088709f099b1",
+    "lera-minimal": "f2c9e20"
+  },
+  "instances": [
+    {
+      "dataset": "Dabia2013",
+      "num_customers": 100,
+      "instance_name": "C104"
+    },
+    {
+      "dataset": "Dabia2013",
+      "num_customers": 100,
+      "instance_name": "RC201"
+    }
+  ],
+  "backend": "CPLEX",
+  "horizon_s": 600,
+  "memory_mb": 16384,
+  "physical_lanes": 2,
+  "orders": [
+    [
+      "correction-on",
+      "dominance-profile",
+      "lera-minimal"
+    ],
+    [
+      "lera-minimal",
+      "dominance-profile",
+      "correction-on"
+    ]
+  ],
+  "sample_stride": 1009,
+  "sample_offset": 0,
+  "rc201_completed_9d_root_whole_work_equivalence_required": true,
+  "c104_censored_mechanism_sample_allowed": true,
+  "prepare_solver_cells_started": 0,
+  "manifest_generator": "scripts/ms58_u_filter_opportunity_compute.py manifest",
+  "runtime_pins_required": [
+    "correction-on.core_sha256",
+    "correction-on.lera_sha256",
+    "dominance-profile.core_sha256",
+    "dominance-profile.lera_sha256"
+  ]
+}

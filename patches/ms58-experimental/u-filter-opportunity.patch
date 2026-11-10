@@ -1,0 +1,1005 @@
+diff --git a/cpp/lera/CMakeLists.txt b/cpp/lera/CMakeLists.txt
+index bf4ed4c..4ca4999 100644
+--- a/cpp/lera/CMakeLists.txt
++++ b/cpp/lera/CMakeLists.txt
+@@ -50,6 +50,14 @@ if(KAYROS_DOMINANCE_PROFILING)
+     target_compile_definitions(lera PUBLIC KAYROS_DOMINANCE_PROFILING=1)
+ endif()
+ 
++option(KAYROS_U_FILTER_OPPORTUNITY_PROFILING "Compile sampled U-filter opportunity diagnostics" OFF)
++if(KAYROS_U_FILTER_OPPORTUNITY_PROFILING)
++    if(NOT KAYROS_DOMINANCE_PROFILING)
++        message(FATAL_ERROR "U-filter opportunity diagnostics require KAYROS_DOMINANCE_PROFILING=ON")
++    endif()
++    target_compile_definitions(lera PUBLIC KAYROS_U_FILTER_OPPORTUNITY_PROFILING=1)
++endif()
++
+ target_compile_features(lera PUBLIC cxx_std_23)
+ set_target_properties(lera PROPERTIES POSITION_INDEPENDENT_CODE ON)
+ # Same bit-identical arithmetic policy as kayros' _core.
+diff --git a/cpp/lera/main/include/labeling/dominance_profile.h b/cpp/lera/main/include/labeling/dominance_profile.h
+index e92bfc9..ea9c8b3 100644
+--- a/cpp/lera/main/include/labeling/dominance_profile.h
++++ b/cpp/lera/main/include/labeling/dominance_profile.h
+@@ -12,6 +12,10 @@
+ #include <stdexcept>
+ #include <string>
+ #include "goc/lib/json.hpp"
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++#include <optional>
++#include "u_filter_opportunity.h"
++#endif
+ 
+ namespace solver {
+ class DominanceProfile {
+@@ -29,6 +33,9 @@ public:
+         uint64_t finished = 0, sampled_finished = 0, sampled_ns = 0;
+         std::array<uint64_t, static_cast<size_t>(Stage::Count)> stage_ns{};
+         Counters counters;
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++        UFilterOpportunityTotals opportunity;
++#endif
+     };
+     struct Operation {
+         uint64_t attempts = 0, sampled_attempts = 0;
+@@ -75,6 +82,9 @@ private:
+                     value["sampled_stage_ns"][stage_names[s]] = outcome.stage_ns[s];
+                 for (size_t c = 0; c < outcome.counters.values.size(); ++c)
+                     value["counters"][counter_names[c]] = outcome.counters.values[c];
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++                value["sampled_u_filter_opportunity"] = outcome.opportunity.ToJson();
++#endif
+                 entry[o ? "eliminated" : "survived"] = std::move(value);
+             }
+             result[kind_names[k]] = std::move(entry);
+@@ -87,7 +97,17 @@ private:
+             {"forward", DirectionJson(directions_[0])}, {"backward", DirectionJson(directions_[1])}};
+     }
+     void Write(Json record) {
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++        record["schema"] = "kayros-ms58-u-filter-opportunity-v1";
++#else
+         record["schema"] = "kayros-ms58-dominance-profile-v1";
++#endif
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++        record["u_filter_opportunity"] = {{"diagnostic_parent_source", "a2dcf8870c17e7edeccb472b27bee0e544eec997"},
++            {"mask_scope", "whole bucket and fixed entry blocks16/32/64 before cost/U filters"},
++            {"credit_scope", "actual rejected U tests in sampled episodes; granularities overlap"},
++            {"maintenance_costs_measured", false}, {"runtime_benefit_claim", false}, {"timing_comparable_to_parent", false}};
++#endif
+         record["diagnostic_only"] = true;
+         record["call"] = call_;
+         const auto line = record.dump() + '\n';
+@@ -154,6 +174,9 @@ public:
+         DominanceProfile* owner_ = nullptr;
+         Operation* operation_ = nullptr;
+         Counters counters_;
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++        std::optional<UFilterOpportunityTotals> opportunity_;
++#endif
+         bool sampled_ = false, finished_ = false;
+         Stage stage_ = Stage::Scan;
+         Clock::time_point start_{}, last_{};
+@@ -166,10 +189,19 @@ public:
+             const auto ordinal = operation_->attempts++;
+             sampled_ = ordinal % owner_->stride_ == owner_->offset_;
+             if (sampled_) { ++operation_->sampled_attempts; start_ = last_ = Clock::now(); }
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++            if (sampled_ && kind != Kind::MergeMaintenance) {
++                opportunity_.emplace();
++                ++opportunity_->sampled_calls;
++            }
++#endif
+         }
+         Episode(const Episode&) = delete;
+         Episode& operator=(const Episode&) = delete;
+         bool Sampled() const { return sampled_; }
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++        UFilterOpportunityTotals* Opportunity() { return opportunity_ ? &*opportunity_ : nullptr; }
++#endif
+         Counters* Accumulator() { return operation_ ? &counters_ : nullptr; }
+         void Add(Counter counter, uint64_t count = 1) { if (operation_ && counter != Counter::Count) counters_.Add(counter, count); }
+         bool Result(bool result, Counter yes, Counter no) { Add(result ? yes : no); return result; }
+@@ -191,6 +223,9 @@ public:
+                 outcome.sampled_ns += Ns(now - start_);
+                 for (size_t s = 0; s < stage_ns_.size(); ++s) outcome.stage_ns[s] += stage_ns_[s];
+             }
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++            if (opportunity_) outcome.opportunity.Merge(*opportunity_);
++#endif
+             ++outcome.finished;
+             for (size_t c = 0; c < counters_.values.size(); ++c) outcome.counters.values[c] += counters_.values[c];
+             finished_ = true;
+diff --git a/cpp/lera/main/include/labeling/u_filter_opportunity.h b/cpp/lera/main/include/labeling/u_filter_opportunity.h
+new file mode 100644
+index 0000000..d09ff4a
+--- /dev/null
++++ b/cpp/lera/main/include/labeling/u_filter_opportunity.h
+@@ -0,0 +1,182 @@
++#pragma once
++
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++#include <array>
++#include <cstdint>
++#include <utility>
++#include <vector>
++#include "goc/lib/json.hpp"
++
++namespace solver {
++// All counts describe sampled, original execution. Granularities overlap.
++struct UFilterScaleTotals {
++    uint64_t snapshot_groups = 0, snapshot_members = 0;
++    uint64_t mask_rejected_groups = 0, mask_rejected_snapshot_members = 0;
++    uint64_t loop_reached_groups = 0, u_test_reached_groups = 0;
++    uint64_t loop_entries = 0, cost_break_entries = 0;
++    uint64_t actual_u_tests = 0, subset_pass = 0, subset_reject = 0;
++    uint64_t covered_actual_rejects = 0, retired_members = 0, certificate_violations = 0;
++
++    void Merge(const UFilterScaleTotals& other) {
++#define U_MERGE(field) field += other.field
++        U_MERGE(snapshot_groups); U_MERGE(snapshot_members);
++        U_MERGE(mask_rejected_groups); U_MERGE(mask_rejected_snapshot_members);
++        U_MERGE(loop_reached_groups); U_MERGE(u_test_reached_groups);
++        U_MERGE(loop_entries); U_MERGE(cost_break_entries);
++        U_MERGE(actual_u_tests); U_MERGE(subset_pass); U_MERGE(subset_reject);
++        U_MERGE(covered_actual_rejects); U_MERGE(retired_members); U_MERGE(certificate_violations);
++#undef U_MERGE
++    }
++    nlohmann::json ToJson() const {
++        return {{"snapshot_groups", snapshot_groups}, {"snapshot_members", snapshot_members},
++            {"mask_rejected_groups", mask_rejected_groups}, {"mask_rejected_snapshot_members", mask_rejected_snapshot_members},
++            {"loop_reached_groups", loop_reached_groups}, {"u_test_reached_groups", u_test_reached_groups},
++            {"loop_entries", loop_entries}, {"cost_break_entries", cost_break_entries},
++            {"actual_u_tests", actual_u_tests}, {"subset_pass", subset_pass}, {"subset_reject", subset_reject},
++            {"covered_actual_rejects", covered_actual_rejects}, {"retired_members", retired_members},
++            {"certificate_violations", certificate_violations}};
++    }
++};
++
++struct UFilterOpportunityTotals {
++    uint64_t sampled_calls = 0, depot_shortcut_calls = 0, u_relaxed_calls = 0, cost_relaxed_correction_calls = 0;
++    uint64_t bucket_entries = 0, demand_break_buckets = 0, u_relaxed_buckets = 0;
++    uint64_t bucket_snapshots = 0, empty_bucket_snapshots = 0, snapshot_label_reads = 0;
++    uint64_t finished_snapshots = 0, cost_break_snapshots = 0, early_elimination_snapshots = 0;
++    uint64_t unvisited_snapshot_members = 0, retired_labels = 0, membership_violations = 0;
++    std::array<UFilterScaleTotals, 4> scales{};
++
++    void Merge(const UFilterOpportunityTotals& other) {
++#define U_MERGE(field) field += other.field
++        U_MERGE(sampled_calls); U_MERGE(depot_shortcut_calls); U_MERGE(u_relaxed_calls); U_MERGE(cost_relaxed_correction_calls);
++        U_MERGE(bucket_entries); U_MERGE(demand_break_buckets); U_MERGE(u_relaxed_buckets);
++        U_MERGE(bucket_snapshots); U_MERGE(empty_bucket_snapshots); U_MERGE(snapshot_label_reads);
++        U_MERGE(finished_snapshots); U_MERGE(cost_break_snapshots); U_MERGE(early_elimination_snapshots);
++        U_MERGE(unvisited_snapshot_members); U_MERGE(retired_labels); U_MERGE(membership_violations);
++#undef U_MERGE
++        for (size_t i = 0; i < scales.size(); ++i) scales[i].Merge(other.scales[i]);
++    }
++    nlohmann::json ToJson() const {
++        nlohmann::json result = {{"sampled_calls", sampled_calls}, {"depot_shortcut_calls", depot_shortcut_calls},
++            {"u_relaxed_calls", u_relaxed_calls}, {"cost_relaxed_correction_calls", cost_relaxed_correction_calls},
++            {"bucket_entries", bucket_entries}, {"demand_break_buckets", demand_break_buckets}, {"u_relaxed_buckets", u_relaxed_buckets},
++            {"bucket_snapshots", bucket_snapshots}, {"empty_bucket_snapshots", empty_bucket_snapshots},
++            {"snapshot_label_reads", snapshot_label_reads}, {"finished_snapshots", finished_snapshots},
++            {"cost_break_snapshots", cost_break_snapshots}, {"early_elimination_snapshots", early_elimination_snapshots},
++            {"unvisited_snapshot_members", unvisited_snapshot_members}, {"retired_labels", retired_labels},
++            {"membership_violations", membership_violations}};
++        static constexpr const char* names[] = {"whole_bucket", "block16", "block32", "block64"};
++        for (size_t i = 0; i < scales.size(); ++i) result["scales"][names[i]] = scales[i].ToJson();
++        return result;
++    }
++};
++
++inline bool UFilterDemandBreak(UFilterOpportunityTotals* totals, bool result) {
++    if (totals && result) ++totals->demand_break_buckets;
++    return result;
++}
++
++// Fixed groups contain every bucket-entry label, even unvisited suffixes.
++// Correction erasures preserve order. A separate ordinal retains membership
++// rather than regrouping the shrinking vector at its current loop index.
++template<class Label>
++class UFilterBucketSnapshot {
++    using Mask = decltype(std::declval<Label>().U);
++    struct Group {
++        Mask mask;
++        size_t members = 0;
++        bool rejected = false, loop_reached = false, u_test_reached = false;
++    };
++    UFilterOpportunityTotals* totals_ = nullptr;
++    std::vector<const Label*> members_;
++    std::array<std::vector<Group>, 4> groups_;
++    size_t next_ = 0, current_ = 0;
++    bool member_valid_ = false, finished_ = false;
++    static size_t GroupIndex(size_t scale, size_t index) {
++        static constexpr size_t sizes[] = {0, 16, 32, 64};
++        return scale == 0 ? 0 : index / sizes[scale];
++    }
++public:
++    UFilterBucketSnapshot(UFilterOpportunityTotals* totals, const std::vector<Label*>& labels,
++                          const Mask& query, bool correction) : totals_(totals) {
++        if (!totals_) return;
++        ++totals_->bucket_snapshots;
++        if (labels.empty()) { ++totals_->empty_bucket_snapshots; return; }
++        members_.assign(labels.begin(), labels.end());
++        const size_t count = labels.size();
++        groups_[0].resize(1);
++        groups_[1].resize((count + 15) / 16);
++        groups_[2].resize((count + 31) / 32);
++        groups_[3].resize((count + 63) / 64);
++        for (size_t i = 0; i < count; ++i) {
++            ++totals_->snapshot_label_reads;
++            for (size_t scale = 0; scale < groups_.size(); ++scale) {
++                auto& group = groups_[scale][GroupIndex(scale, i)];
++                if (group.members++ == 0) group.mask = labels[i]->U;
++                else if (correction) group.mask |= labels[i]->U;
++                else group.mask &= labels[i]->U;
++            }
++        }
++        for (size_t scale = 0; scale < groups_.size(); ++scale) {
++            auto& stats = totals_->scales[scale];
++            for (auto& group : groups_[scale]) {
++                group.rejected = correction ? ((query & group.mask) != query) : ((group.mask & query) != group.mask);
++                ++stats.snapshot_groups;
++                stats.snapshot_members += group.members;
++                if (group.rejected) {
++                    ++stats.mask_rejected_groups;
++                    stats.mask_rejected_snapshot_members += group.members;
++                }
++            }
++        }
++    }
++    void Visit(const Label* label) {
++        if (!totals_) return;
++        current_ = next_++;
++        member_valid_ = current_ < members_.size() && members_[current_] == label;
++        if (!member_valid_) { ++totals_->membership_violations; return; }
++        for (size_t scale = 0; scale < groups_.size(); ++scale) {
++            auto& group = groups_[scale][GroupIndex(scale, current_)];
++            auto& stats = totals_->scales[scale];
++            ++stats.loop_entries;
++            if (!group.loop_reached) { group.loop_reached = true; ++stats.loop_reached_groups; }
++        }
++    }
++    bool CostBreak(bool result) {
++        if (totals_ && result) {
++            ++totals_->cost_break_snapshots;
++            if (member_valid_) for (auto& scale : totals_->scales) ++scale.cost_break_entries;
++        }
++        return result;
++    }
++    bool SubsetRejected(bool rejected) {
++        if (!totals_ || !member_valid_) return rejected;
++        for (size_t scale = 0; scale < groups_.size(); ++scale) {
++            auto& group = groups_[scale][GroupIndex(scale, current_)];
++            auto& stats = totals_->scales[scale];
++            ++stats.actual_u_tests;
++            if (rejected) ++stats.subset_reject;
++            else ++stats.subset_pass;
++            if (!group.u_test_reached) { group.u_test_reached = true; ++stats.u_test_reached_groups; }
++            if (group.rejected) {
++                if (rejected) ++stats.covered_actual_rejects;
++                else ++stats.certificate_violations;
++            }
++        }
++        return rejected;
++    }
++    void Retire() {
++        if (!totals_) return;
++        ++totals_->retired_labels;
++        if (member_valid_) for (auto& scale : totals_->scales) ++scale.retired_members;
++    }
++    void Finish(bool early_elimination = false) {
++        if (!totals_ || finished_) return;
++        ++totals_->finished_snapshots;
++        if (early_elimination) ++totals_->early_elimination_snapshots;
++        if (next_ <= members_.size()) totals_->unvisited_snapshot_members += members_.size() - next_;
++        finished_ = true;
++    }
++};
++} // namespace solver
++#endif
+diff --git a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+index 6a69e02..1f639f3 100644
+--- a/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
++++ b/cpp/lera/main/src/labeling/monodirectional_labeling.cpp
+@@ -431,11 +431,18 @@ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ 	profile.Add(C::CandidatePieces, l->duration.PieceCount());
+ 	profile.Add(C::CandidateDemandFloorSum, static_cast<uint64_t>(floor(l->q)));
+ 	profile.Add(C::CandidateBuckets, U[l->v].end() - U[l->v].begin());
++#endif
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++	if (auto* u = profile.Opportunity(); u && elementary_check_relaxation) ++u->u_relaxed_calls;
+ #endif
+ 	// If full route, then it is dominated if the reduced cost is bigger than or equal to zero.
+ #ifdef KAYROS_DOMINANCE_PROFILING
+ 	if (l->v == vrp_.d) {
+ 		profile.Add(C::DepotShortcut);
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++		if (auto* u = profile.Opportunity()) ++u->depot_shortcut_calls;
++#endif
++
+ 		const bool eliminated = epsilon_bigger_equal(l->min_cost, 0.0);
+ 		profile.Finish(eliminated);
+ 		return eliminated;
+@@ -463,27 +470,52 @@ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ 	{
+ #ifdef KAYROS_DOMINANCE_PROFILING
+ 		profile.Add(C::Buckets);
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++		if (auto* u = profile.Opportunity()) ++u->bucket_entries;
++#endif
++
+ #endif
+ #ifdef KAYROS_DOMINANCE_PROFILING
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++		if (UFilterDemandBreak(profile.Opportunity(), profile.Result(epsilon_bigger(demand_entry.first, l->q), C::DemandBreak, C::Count))) break;
++#else
+ 		if (profile.Result(epsilon_bigger(demand_entry.first, l->q), C::DemandBreak, C::Count)) break;
++#endif
+ #else
+ 		if (epsilon_bigger(demand_entry.first, l->q)) break;
++#endif
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++		if (auto* u = profile.Opportunity(); u && elementary_check_relaxation) ++u->u_relaxed_buckets;
++		UFilterBucketSnapshot<Label> u_snapshot(elementary_check_relaxation ? nullptr : profile.Opportunity(),
++			demand_entry.second, l->U, false);
+ #endif
+ 		for (auto& m: demand_entry.second)
+ 		{
+ #ifdef KAYROS_DOMINANCE_PROFILING
+ 			profile.Add(C::Labels);
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++			u_snapshot.Visit(m);
++#endif
++
+ #endif
+ 			// We know that q(m) <= q(l), v(m) = v(l).
+ #ifdef KAYROS_DOMINANCE_PROFILING
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++			if (u_snapshot.CostBreak(profile.Result(sort_by_cost && epsilon_bigger(alpha(m, partial), l_beta), C::CostBreak, C::Count))) break;
++#else
+ 			if (profile.Result(sort_by_cost && epsilon_bigger(alpha(m, partial), l_beta), C::CostBreak, C::Count)) break;
++#endif
+ #else
+ 			if (sort_by_cost && epsilon_bigger(alpha(m, partial), l_beta)) break;
+ #endif
+ #ifdef KAYROS_DOMINANCE_PROFILING
+ 			if (!elementary_check_relaxation) {
+ 				profile.Add(C::SubsetTests);
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++				if (profile.Result(u_snapshot.SubsetRejected(!is_subset(m->U, l->U)), C::SubsetReject, C::SubsetPass)) continue;
++#else
+ 				if (profile.Result(!is_subset(m->U, l->U), C::SubsetReject, C::SubsetPass)) continue;
++#endif
+ 			}
+ #else
+ 			if (!elementary_check_relaxation && !is_subset(m->U, l->U)) continue;
+@@ -529,10 +561,16 @@ bool MonodirectionalLabeling::DominationStep(Label* l) const
+ 					lu.c_str(), mu.c_str(), l->rw.left, l->rw.right, m->rw.left, m->rw.right);
+ 			}
+ #ifdef KAYROS_DOMINANCE_PROFILING
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++			u_snapshot.Finish(true);
++#endif
+ 			profile.Finish(true);
+ #endif
+ 			return true;
+ 		}
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++		u_snapshot.Finish();
++#endif
+ 	}
+ 	trace_domination_detail = false;
+ 	if (trace::prefix_len(l) > 0)
+@@ -567,7 +605,16 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ #endif
+ 
+ #ifdef KAYROS_DOMINANCE_PROFILING
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++	if (auto* u = profile.Opportunity(); u && elementary_check_relaxation) ++u->u_relaxed_calls;
++	if (cost_check_relaxation) {
++		if (auto* u = profile.Opportunity()) ++u->cost_relaxed_correction_calls;
++		profile.Finish(false);
++		return 0;
++	}
++#else
+ 	if (cost_check_relaxation) { profile.Finish(false); return 0; }
++#endif
+ #else
+ 	if (cost_check_relaxation) return 0;
+ #endif
+@@ -577,11 +624,24 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 		auto& demand_entry = *it_d;
+ #ifdef KAYROS_DOMINANCE_PROFILING
+ 		profile.Add(C::Buckets);
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++		if (auto* u = profile.Opportunity()) ++u->bucket_entries;
++#endif
++
+ #endif
+ #ifdef KAYROS_DOMINANCE_PROFILING
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++		if (UFilterDemandBreak(profile.Opportunity(), profile.Result(epsilon_smaller(demand_entry.first, m->q), C::DemandBreak, C::Count))) break;
++#else
+ 		if (profile.Result(epsilon_smaller(demand_entry.first, m->q), C::DemandBreak, C::Count)) break;
++#endif
+ #else
+ 		if (epsilon_smaller(demand_entry.first, m->q)) break;
++#endif
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++		if (auto* u = profile.Opportunity(); u && elementary_check_relaxation) ++u->u_relaxed_buckets;
++		UFilterBucketSnapshot<Label> u_snapshot(elementary_check_relaxation ? nullptr : profile.Opportunity(),
++			demand_entry.second, m->U, true);
+ #endif
+ 		bool changed_cost = false;
+ 		for (int j = 0; j < demand_entry.second.size(); ++j)
+@@ -589,12 +649,20 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 			Label* l = demand_entry.second[j];
+ #ifdef KAYROS_DOMINANCE_PROFILING
+ 			profile.Add(C::Labels);
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++			u_snapshot.Visit(l);
++#endif
++
+ #endif
+ 
+ #ifdef KAYROS_DOMINANCE_PROFILING
+ 			if (!elementary_check_relaxation) {
+ 				profile.Add(C::SubsetTests);
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++				if (profile.Result(u_snapshot.SubsetRejected(!is_subset(m->U, l->U)), C::SubsetReject, C::SubsetPass)) continue;
++#else
+ 				if (profile.Result(!is_subset(m->U, l->U), C::SubsetReject, C::SubsetPass)) continue;
++#endif
+ 			}
+ #else
+ 			if (!elementary_check_relaxation && !is_subset(m->U, l->U)) continue;
+@@ -656,6 +724,10 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 					// If l is fully dominated, remove.
+ #ifdef KAYROS_DOMINANCE_PROFILING
+ 					profile.Add(C::Retirements);
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++					u_snapshot.Retire();
++#endif
++
+ #endif
+ 					retired_labels_.push_back(l);
+ 					demand_entry.second.erase(demand_entry.second.begin()+j);
+@@ -664,6 +736,9 @@ int MonodirectionalLabeling::CorrectionStep(Label* m)
+ 				}
+ 			}
+ 		}
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++		u_snapshot.Finish();
++#endif
+ 		if (changed_cost)
+ 		{
+ 			// Subsequent labels consult U before this batch returns.
+diff --git a/docs/ms58-u-filter-opportunity.md b/docs/ms58-u-filter-opportunity.md
+new file mode 100644
+index 0000000..63445c6
+--- /dev/null
++++ b/docs/ms58-u-filter-opportunity.md
+@@ -0,0 +1,65 @@
++# Sampled U-filter opportunity diagnostic
++
++This experimental derivative starts from exact dominance profiler `a2dcf8870c17e7edeccb472b27bee0e544eec997`, whose algorithm source is selected correction-on `9d64b7c53ddaea7a578d247ebd28db43ae0d4e56`. We add sampled rejection-coverage measurements. We do not skip labels or change arithmetic, query order, bucket contents, correction, retirement or sorting. The original a2dc worktree, its profiler helpers and active experiment outputs remain separate.
++
++## Build and activation
++
++The new CMake option `KAYROS_U_FILTER_OPPORTUNITY_PROFILING` defaults to `OFF` and requires `KAYROS_DOMINANCE_PROFILING=ON`. Both definitions are public on `lera` to preserve library and bridge layouts. The independent `_core` and its ILS implementation receive neither definition. With the new option disabled and dominance profiling enabled, all 7 checked source/header token streams match a2dc. With both options disabled, the original 6 selected9d OFF equivalence checks also pass.
++
++The runtime opt-in stays `KAYROS_DOMINANCE_PROFILE`, naming a new exclusive JSONL path. The existing `KAYROS_DOMINANCE_PROFILE_STRIDE` and `KAYROS_DOMINANCE_PROFILE_OFFSET` keep defaults `1009` and `0`, with the same independent call sampling per direction, operation and pricing call. The new schema is `kayros-ms58-u-filter-opportunity-v1`, with explicit parent-source and opportunity metadata on every record. Existing a2dc parsers must not be reused silently for this schema.
++
++No mask snapshot is built for an unsampled episode or without runtime opt-in. Every sampled dominance/correction episode has a `sampled_u_filter_opportunity` aggregate under its final survived/eliminated outcome. Merge maintenance receives no opportunity samples. The enclosing native status, returned/unfinished pricing semantics, exclusive output and counters remain those of the parent profiler. An unmatched pricing begin remains unfinished.
++
++The new measurements perturb sampled call timing, including mask construction and per-test accounting. Their timing fields must not be compared to a2dc timings. We do not measure production mask maintenance costs or claim a runtime benefit from ideal rejection coverage.
++
++## Certificates and full snapshot groups
++
++We construct a snapshot only after the existing demand check admits a bucket. Every label currently in that bucket belongs to the snapshot, including cost-ineligible labels, labels that fail individual U tests, and suffixes that the real loop will never reach. We compute separate certificates for the whole bucket and contiguous entry-order blocks of 16, 32 and 64 labels. Each final short block includes its complete tail. Empty buckets are counted explicitly and create no group or vacuous rejection certificate.
++
++For ordinary dominance, a prospective dominator must satisfy `U(m) ⊆ U(l)`. A group's intersection mask `A = AND U(m)` rejects the entire group when `A ⊄ U(l)`. For correction, the arriving label must satisfy `U(m) ⊆ U(l)` for a stored label `l`. A group's union mask `O = OR U(l)` rejects the entire group when `U(m) ⊄ O`. These are sufficient group-rejection certificates, so high individual rejection alone does not guarantee high group rejection.
++
++Masks and original pointer membership remain fixed throughout the bucket scan. Correction visits use a separate monotonically increasing entry ordinal, advanced before any cost check, subset check, continuation or retirement. They never use the shrinking vector index `j` for block membership. Erasures preserve the order of the remaining entries, and sorting occurs after the scan. Snapshot OR masks retain retired members. Their extra bits can weaken a rejection certificate but cannot create a false rejection. Labels retain ownership until cleanup and their U sets are immutable after insertion.
++
++## Counts and interpretation
++
++Each scale records the following quantities independently.
++
++- `snapshot_groups`, `snapshot_members`, `mask_rejected_groups` and `mask_rejected_snapshot_members` describe the full prospective groups, including groups never reached by the original execution.
++- `loop_reached_groups` and `loop_entries` count actual loop entries, including a label that triggers the existing cost break.
++- `u_test_reached_groups` and `actual_u_tests` count groups and labels that reach the real, unrelaxed subset test after the cost check.
++- `subset_pass` and `subset_reject` partition actual U tests in those same sampled episodes.
++- `covered_actual_rejects` counts actual rejected U tests whose full snapshot group has a rejection certificate. This is the numerator for rejection coverage. Divide by `actual_u_tests` for opportunity among actual tests, or by `subset_reject` for coverage among actual rejections. Do not use the parent profiler's unsampled-inclusive counters as a denominator.
++- `cost_break_entries` records the terminating loop-entry label separately. It receives zero actual-U-test or rejection-coverage credit.
++- `retired_members` records real retirement in the original membership, and `certificate_violations` counts a certified group that nevertheless has an actual subset pass.
++
++The 4 granularities overlap and must not be summed. Snapshot group populations are not avoided-label estimates. Credit is restricted to the tests that the original execution actually performs before an early elimination, cost break or return. Early elimination leaves later groups and buckets without coverage credit. Skipping a block containing the existing cost break could change later traversal overhead, so coverage is not a predicted net number of loop visits or a runtime estimate.
++
++The enclosing counters expose `sampled_calls`, bucket entries, demand-break buckets, U-relaxed buckets, full bucket snapshots, empty snapshots, `snapshot_label_reads`, finished snapshots, cost-break snapshots, early-elimination snapshots, unvisited snapshot members and actual retirements. Construction traverses `snapshot_label_reads` distinct labels per snapshot pass and accumulates masks at each of the 4 scales. These counts make otherwise hidden full-bucket construction work visible, including unvisited suffixes. They do not measure the cost of maintaining cached masks in a real algorithm.
++
++U-relaxed episodes construct no masks. Depot shortcuts and the correction cost-relaxation shortcut likewise construct none. The flags `u_relaxed_calls`, `depot_shortcut_calls` and `cost_relaxed_correction_calls` can overlap and are not a disjoint partition of sampled calls. Demand-breaking buckets receive no mask snapshot.
++
++Before using a measurement, require zero `membership_violations`, zero per-scale `certificate_violations`, `subset_pass + subset_reject == actual_u_tests`, and `covered_actual_rejects <= subset_reject` for each scale and scope. These identities are checked in the native fixtures. Interrupted operation episodes are not merged into completed outcomes, as in a2dc, so an unfinished pricing snapshot remains censored.
++
++## Local validation and reserved-node gates
++
++The standalone fixture checks full masks rather than visited-prefix masks, unvisited suffixes, 65-label tails, cost-break-only groups, early elimination, start/middle erasure with fixed entry blocks, conservative stale OR masks, empty buckets, inactive snapshots, deliberately injected membership/certificate violations, sample-only collection, pricing reset and outcome aggregation.
++
++The native fixture exercises 20 scenarios across both arithmetic modes. It checks start/middle retirement, whole-bucket and block coverage, tails, early cost breaks, an early dominator, U-relaxed ordinary/correction calls, the HC correction shortcut, depot bypass, unsampled calls, empty buckets and demand breaks. All real certificate and membership violation counters are zero. Its recorded label states match the a2dc native library with digest `bdbf2a6cabb793c3`. The original correction invariants pass, including both sorting settings. The existing accounting, 5,040-case PWL and native dominance/correction fixtures also pass against the new library.
++
++The local CPLEX static library and `_lera` bridge compile in the project Nix shell. Before any routing pilot, rebuild on reserved compute and rerun these fixtures against the new reserved-node library. The parent comparison must link its separately built a2dc library. Do not reuse the local Nix `.so` on Grid'5000.
++
++```bash
++# Configure on the reserved node with its usual compiler, Boost and CPLEX setup.
++cmake -S . -B build/cplex -DCMAKE_BUILD_TYPE=Release -DLERA_LP_BACKEND=cplex -DKAYROS_DOMINANCE_PROFILING=ON -DKAYROS_U_FILTER_OPPORTUNITY_PROFILING=ON -Dpybind11_DIR="$(python -m pybind11 --cmakedir)"
++cmake --build build/cplex --target _lera -j 4
++
++COMMON=(-std=c++23 -O2 -DNDEBUG -ffp-contract=off -DKAYROS_DOMINANCE_PROFILING=1 -DKAYROS_U_FILTER_OPPORTUNITY_PROFILING=1 -Icpp/lera/main/include -Icpp/lera/goc/include -Icpp/lera/nyr/include -Icpp/lera/magic_enum/include)
++g++ "${COMMON[@]}" tests/cpp/test_u_filter_opportunity.cpp -o build/test_u_filter_opportunity
++build/test_u_filter_opportunity
++g++ "${COMMON[@]}" tests/cpp/test_u_filter_opportunity_labeling.cpp build/cplex/cpp/lera/liblera.a -lboost_graph -ldl -lm -o build/test_u_filter_opportunity_labeling
++build/test_u_filter_opportunity_labeling
++```
++
++Use the compiler and library paths from the actual CMake cache. Add its Boost include/library paths when the module environment requires them. The parent differential build uses the same native fixture source and common flags with `KAYROS_U_FILTER_OPPORTUNITY_PROFILING` omitted, linked to a2dc's CPLEX `liblera.a`. Its final state digest must match. Retain compile/run stdout, stderr, exit status, source, library, binary and harness hashes, including failed gates.
++
++No routing experiment has been launched from this worktree, and no runtime or full solver-trajectory equivalence claim is made. Future routing pilots remain restricted to Dabia2013 n25/n50/n100 and CPLEX, with fixed minimalLera `f2c9e20`. The immediate diagnostic control is the original a2dc/selected9d source as appropriate to the question being measured.
+diff --git a/tests/cpp/check_u_filter_opportunity_off.py b/tests/cpp/check_u_filter_opportunity_off.py
+new file mode 100644
+index 0000000..a50ea31
+--- /dev/null
++++ b/tests/cpp/check_u_filter_opportunity_off.py
+@@ -0,0 +1,63 @@
++"""Check opportunity-OFF tokens against a2dc with dominance profiling ON."""
++from __future__ import annotations
++
++import hashlib
++import io
++import json
++import os
++from pathlib import Path
++import re
++import subprocess
++import tarfile
++import tempfile
++
++BASE = "a2dcf8870c17e7edeccb472b27bee0e544eec997"
++ROOT = Path(__file__).resolve().parents[2]
++SOURCES = [
++    "cpp/lera/main/include/labeling/dominance_profile.h",
++    "cpp/lera/main/src/labeling/monodirectional_labeling.cpp",
++    "cpp/lera/main/src/labeling/bidirectional_labeling.cpp",
++    "cpp/lera/main/src/labeling/pwl_domination_function.cpp",
++    "cpp/lera/main/include/labeling/bidirectional_labeling.h",
++    "cpp/lera/main/include/labeling/monodirectional_labeling.h",
++    "cpp/lera/main/include/labeling/pwl_domination_function.h",
++]
++# Keep quoted literals intact, including their internal whitespace. The input
++# has already been preprocessed, so comments and directives are absent.
++TOKEN = re.compile(
++    r'(?:u8|u|U|L)?R"(?P<delimiter>[^ ()\\\t\r\n]{0,16})\(.*?\)(?P=delimiter)"'
++    r'|(?:u8|u|U|L)?"(?:\\.|[^"\\])*"'
++    r"|(?:u8|u|U|L)?'(?:\\.|[^'\\])*'"
++    r'|[A-Za-z_$][A-Za-z_0-9$]*'
++    r'|(?:\d|\.\d)(?:[eEpP][+-]|[A-Za-z_0-9.])*'
++    r'|%:%:|<=>|>>=|<<=|->\*|\.\.\.|##|::|\.\*|->|\+\+|--|<<|>>|<=|>=|==|!='
++    r'|&&|\|\||\*=|/=|%=|\+=|-=|&=|\^=|\|=|<:|:>|<%|%>|%:|[^\s]',
++    re.DOTALL,
++)
++
++
++def tokens(tree: Path, source: str) -> bytes:
++    command = ["g++", "-std=c++23", "-E", "-P", "-w", "-x", "c++",
++               "-DKAYROS_DOMINANCE_PROFILING=1", "-Icpp/lera/main/include", "-Icpp/lera/goc/include",
++               "-Icpp/lera/nyr/include", "-Icpp/lera/magic_enum/include"]
++    if os.environ.get("BOOST_INCLUDE"):
++        command += ["-isystem", os.environ["BOOST_INCLUDE"]]
++    command.append(source)
++    result = subprocess.run(command, cwd=tree, check=True, capture_output=True, text=True)
++    return "\0".join(match.group() for match in TOKEN.finditer(result.stdout)).encode()
++
++
++with tempfile.TemporaryDirectory(prefix="kayros-dominance-off-") as temporary:
++    base_tree = Path(temporary)
++    archive = subprocess.run(["git", "archive", BASE], cwd=ROOT, check=True, capture_output=True).stdout
++    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
++        tar.extractall(base_tree, filter="data")
++    results = []
++    for source in SOURCES:
++        original, derivative = tokens(base_tree, source), tokens(ROOT, source)
++        if original != derivative:
++            raise AssertionError(f"OFF preprocessing differs for {source}")
++        results.append({"source": source, "token_sha256": hashlib.sha256(original).hexdigest(),
++                        "token_bytes": len(original), "equivalent": True})
++    print(json.dumps({"base": BASE, "definition": "KAYROS_DOMINANCE_PROFILING=1; KAYROS_U_FILTER_OPPORTUNITY_PROFILING absent",
++                      "checks": results}, indent=2))
+diff --git a/tests/cpp/test_u_filter_opportunity.cpp b/tests/cpp/test_u_filter_opportunity.cpp
+new file mode 100644
+index 0000000..ef9251b
+--- /dev/null
++++ b/tests/cpp/test_u_filter_opportunity.cpp
+@@ -0,0 +1,192 @@
++#include "labeling/u_filter_opportunity.h"
++#include "labeling/dominance_profile.h"
++
++#include <bitset>
++#include <filesystem>
++#include <fstream>
++#include <iostream>
++#include <stdexcept>
++
++using namespace solver;
++namespace {
++struct FakeLabel { std::bitset<8> U; };
++using Mask = decltype(FakeLabel::U);
++using Snapshot = UFilterBucketSnapshot<FakeLabel>;
++void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
++bool subset(Mask left, Mask right) { return (left & right) == left; }
++void invariants(const UFilterOpportunityTotals& totals) {
++    require(totals.membership_violations == 0, "Snapshot pointer membership changed");
++    for (const auto& scale : totals.scales) {
++        require(scale.certificate_violations == 0, "A rejected mask admitted an actual subset pass");
++        require(scale.subset_pass + scale.subset_reject == scale.actual_u_tests, "Subset denominator is incomplete");
++        require(scale.covered_actual_rejects <= scale.subset_reject, "Coverage exceeded actual rejects");
++    }
++}
++
++void check_full_masks_and_tails() {
++    std::vector<FakeLabel> owned(65, FakeLabel{Mask(1)});
++    owned.back().U = Mask(2);
++    std::vector<FakeLabel*> labels;
++    for (auto& label : owned) labels.push_back(&label);
++    UFilterOpportunityTotals totals;
++    Snapshot snapshot(&totals, labels, Mask{}, false);
++    for (int i = 0; i < 3; ++i) {
++        snapshot.Visit(labels[i]);
++        snapshot.SubsetRejected(!subset(labels[i]->U, Mask{}));
++    }
++    snapshot.Finish();
++    require(totals.snapshot_label_reads == 65 && totals.unvisited_snapshot_members == 62,
++            "Construction failed to include the unvisited suffix");
++    require(totals.scales[0].mask_rejected_groups == 0 && totals.scales[0].covered_actual_rejects == 0,
++            "Whole mask used only the visited prefix");
++    const uint64_t groups[] = {1, 5, 3, 2};
++    for (size_t i = 0; i < totals.scales.size(); ++i) {
++        require(totals.scales[i].snapshot_groups == groups[i] && totals.scales[i].snapshot_members == 65,
++                "Tail membership changed");
++        require(totals.scales[i].loop_reached_groups == 1 && totals.scales[i].u_test_reached_groups == 1,
++                "Unvisited groups received reach credit");
++        if (i) require(totals.scales[i].covered_actual_rejects == 3, "Coverage credited unvisited members");
++    }
++    invariants(totals);
++}
++
++void check_cost_break_and_early_exit() {
++    std::vector<FakeLabel> owned(17, FakeLabel{Mask(1)});
++    std::vector<FakeLabel*> labels;
++    for (auto& label : owned) labels.push_back(&label);
++    UFilterOpportunityTotals totals;
++    Snapshot snapshot(&totals, labels, Mask{}, false);
++    snapshot.Visit(labels[0]);
++    require(!snapshot.CostBreak(false), "Cost wrapper changed false");
++    snapshot.SubsetRejected(true);
++    snapshot.Visit(labels[1]);
++    require(snapshot.CostBreak(true), "Cost wrapper changed true");
++    snapshot.Finish();
++    for (const auto& scale : totals.scales) {
++        require(scale.loop_entries == 2 && scale.cost_break_entries == 1 && scale.actual_u_tests == 1,
++                "Cost-break label received an actual U test");
++        require(scale.covered_actual_rejects == 1, "Cost break or suffix inflated coverage");
++    }
++    invariants(totals);
++    // A group reached only by a cost break contributes no useful U coverage.
++    UFilterOpportunityTotals cost_only;
++    Snapshot first_break(&cost_only, labels, Mask{}, false);
++    first_break.Visit(labels[0]); first_break.CostBreak(true); first_break.Finish();
++    for (const auto& scale : cost_only.scales)
++        require(scale.loop_reached_groups == 1 && scale.u_test_reached_groups == 0 && scale.covered_actual_rejects == 0,
++                "Cost-only group inflated opportunities");
++    invariants(cost_only);
++    // Early dominator at entry leaves the later rejected block unvisited.
++    owned[0].U = Mask{};
++    UFilterOpportunityTotals early;
++    Snapshot dominator(&early, labels, Mask{}, false);
++    dominator.Visit(labels[0]); dominator.SubsetRejected(false); dominator.Finish(true);
++    require(early.early_elimination_snapshots == 1 && early.unvisited_snapshot_members == 16,
++            "Early elimination lost its unvisited suffix");
++    for (const auto& scale : early.scales) require(scale.covered_actual_rejects == 0, "Early return credited later groups");
++    invariants(early);
++}
++
++void check_correction_erasure_membership() {
++    for (size_t erase_at : {size_t(0), size_t(8)}) {
++        std::vector<FakeLabel> owned(33, FakeLabel{Mask{}});
++        // A passing member in the first block weakens its OR certificate.
++        owned[erase_at].U = Mask(1);
++        std::vector<FakeLabel*> labels;
++        for (auto& label : owned) labels.push_back(&label);
++        UFilterOpportunityTotals totals;
++        Snapshot snapshot(&totals, labels, Mask(1), true);
++        for (size_t j = 0; j < labels.size();) {
++            auto* label = labels[j];
++            snapshot.Visit(label);
++            const bool reject = !subset(Mask(1), label->U);
++            snapshot.SubsetRejected(reject);
++            if (!reject) { snapshot.Retire(); labels.erase(labels.begin() + j); }
++            else ++j;
++        }
++        snapshot.Finish();
++        require(totals.retired_labels == 1 && totals.unvisited_snapshot_members == 0 && totals.snapshot_label_reads == 33,
++                "Erasure changed original snapshot traversal");
++        require(totals.scales[0].covered_actual_rejects == 0, "Whole OR was rebuilt after a retirement");
++        require(totals.scales[1].covered_actual_rejects == 17 && totals.scales[2].covered_actual_rejects == 1 &&
++                totals.scales[3].covered_actual_rejects == 0,
++                "Correction regrouped at a shrinking vector index");
++        invariants(totals);
++    }
++}
++
++void check_empty_inactive_and_violations() {
++    UFilterOpportunityTotals totals;
++    std::vector<FakeLabel*> empty;
++    Snapshot snapshot(&totals, empty, Mask(1), true); snapshot.Finish();
++    require(totals.empty_bucket_snapshots == 1 && totals.finished_snapshots == 1, "Empty bucket lost explicit accounting");
++    for (const auto& scale : totals.scales) require(scale.snapshot_groups == 0, "Empty group received a vacuous certificate");
++    FakeLabel label{Mask(1)}, wrong{Mask(1)};
++    std::vector<FakeLabel*> labels{&label};
++    Snapshot inactive(nullptr, labels, Mask{}, false);
++    inactive.Visit(&wrong); inactive.SubsetRejected(false); inactive.Retire(); inactive.Finish();
++    require(totals.snapshot_label_reads == 0, "Inactive snapshot performed work");
++    UFilterOpportunityTotals wrong_members;
++    Snapshot mismatched(&wrong_members, labels, Mask{}, false);
++    mismatched.Visit(&wrong); mismatched.SubsetRejected(true); mismatched.Finish();
++    require(wrong_members.membership_violations == 1 && wrong_members.scales[0].covered_actual_rejects == 0,
++            "Membership violation was hidden or credited");
++    UFilterOpportunityTotals wrong_certificate;
++    Snapshot impossible(&wrong_certificate, labels, Mask{}, false);
++    impossible.Visit(&label); impossible.SubsetRejected(false); impossible.Finish();
++    for (const auto& scale : wrong_certificate.scales)
++        require(scale.certificate_violations == 1 && scale.covered_actual_rejects == 0,
++                "Certificate violation was hidden or credited");
++}
++
++void check_sampling_reset_and_outcomes() {
++    char pattern[] = "/tmp/u-filter-profile-XXXXXX";
++    const char* directory = mkdtemp(pattern);
++    if (!directory) throw std::runtime_error("Cannot create fixture directory");
++    const std::filesystem::path root(directory), path = root / "profile.jsonl";
++    setenv("KAYROS_DOMINANCE_PROFILE", path.c_str(), 1);
++    setenv("KAYROS_DOMINANCE_PROFILE_STRIDE", "2", 1);
++    setenv("KAYROS_DOMINANCE_PROFILE_OFFSET", "0", 1);
++    {
++        DominanceProfile profile;
++        profile.Begin({});
++        for (int i = 0; i < 3; ++i) {
++            DominanceProfile::Episode episode(profile.GetDirection(0), DominanceProfile::Kind::Dominance);
++            require((episode.Opportunity() != nullptr) == (i % 2 == 0), "Opportunity sampled an unsampled episode");
++            if (auto* totals = episode.Opportunity()) {
++                ++totals->bucket_entries;
++                require(UFilterDemandBreak(totals, true), "Demand-break wrapper changed true");
++            }
++            episode.Finish(i != 0);
++        }
++        profile.End({{"status", "Finished"}}, 0, 0);
++        profile.Begin({});
++        DominanceProfile::Episode reset(profile.GetDirection(0), DominanceProfile::Kind::Dominance);
++        require(reset.Opportunity(), "Sample phase did not reset");
++        reset.Finish(false);
++        profile.End({{"status", "TimeLimitReached"}}, 0, 0);
++    }
++    std::ifstream input(path);
++    std::vector<nlohmann::json> records;
++    std::string line;
++    while (std::getline(input, line)) records.push_back(nlohmann::json::parse(line));
++    require(records.size() == 5 && records[0]["schema"] == "kayros-ms58-u-filter-opportunity-v1", "Feature identity changed");
++    for (const char* outcome : {"survived", "eliminated"}) {
++        const auto& totals = records[2]["forward"]["dominance"][outcome]["sampled_u_filter_opportunity"];
++        require(totals["sampled_calls"] == 1 && totals["demand_break_buckets"] == 1,
++                "Sample-only outcome counters changed");
++    }
++    const auto& reset = records[4]["forward"]["dominance"]["survived"]["sampled_u_filter_opportunity"];
++    require(reset["sampled_calls"] == 1 && reset["bucket_entries"] == 0, "Pricing reset retained opportunity state");
++    unsetenv("KAYROS_DOMINANCE_PROFILE");
++    std::filesystem::remove_all(root);
++}
++}
++int main() {
++    try {
++        check_full_masks_and_tails(); check_cost_break_and_early_exit(); check_correction_erasure_membership();
++        check_empty_inactive_and_violations(); check_sampling_reset_and_outcomes();
++        std::cout << "PASS full-snapshot masks tails actual-U-test-credit cost-break early-elimination erasure membership certificates sample-only reset outcomes\n";
++        return 0;
++    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
++}
+diff --git a/tests/cpp/test_u_filter_opportunity_labeling.cpp b/tests/cpp/test_u_filter_opportunity_labeling.cpp
+new file mode 100644
+index 0000000..8d7be09
+--- /dev/null
++++ b/tests/cpp/test_u_filter_opportunity_labeling.cpp
+@@ -0,0 +1,184 @@
++// Synthetic native calls only. No routing benchmark or master LP is launched.
++#define main correction_base_fixture_main
++#include "test_label_correction.cpp"
++#undef main
++#include <bit>
++#include <cstdint>
++#include <filesystem>
++
++namespace solver {
++struct DominanceProfileTest {
++    static DominanceProfile& Profile(BidirectionalLabeling& solver) { return solver.dominance_profile_; }
++    static void Begin(BidirectionalLabeling& solver) {
++        Profile(solver).Begin({{"fixture", "u_filter_opportunity_native"}});
++        for (int d : {0, 1}) solver.lbl_[d].dominance_profile_ = Profile(solver).GetDirection(d);
++    }
++};
++}
++namespace {
++uint64_t digest = 1469598103934665603ULL;
++void record(double value) { digest ^= std::bit_cast<uint64_t>(value); digest *= 1099511628211ULL; }
++void record(const Label& label) {
++    record(label.v); record(label.q); record(label.p); record(label.cut_cost); record(label.min_cost);
++    record(label.rw.left); record(label.rw.right); record(label.duration.PieceCount());
++    for (size_t i = 0; i < label.U.size(); ++i) record(label.U.test(i));
++    for (const auto& piece : label.duration.Pieces()) {
++        record(piece.domain.left); record(piece.domain.right); record(piece.image.left); record(piece.image.right);
++        record(piece.slope); record(piece.intercept);
++    }
++}
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++const UFilterOpportunityTotals& totals(BidirectionalLabeling& bidi, DominanceProfile::Kind kind, bool eliminated) {
++    return DominanceProfileTest::Profile(bidi).GetDirection(0)->operations[static_cast<size_t>(kind)].outcomes[eliminated].opportunity;
++}
++void invariants(const UFilterOpportunityTotals& u) {
++    require(u.membership_violations == 0, "Native snapshot membership changed");
++    for (const auto& scale : u.scales) {
++        require(scale.certificate_violations == 0, "Native mask rejected an actual subset pass");
++        require(scale.subset_pass + scale.subset_reject == scale.actual_u_tests, "Native subset counts do not partition");
++        require(scale.covered_actual_rejects <= scale.subset_reject, "Native coverage exceeds actual rejects");
++    }
++}
++#endif
++
++void ordinary(const std::filesystem::path& root, int scenario) {
++    const auto path = root / ("ordinary-" + std::to_string(scenario) + ".jsonl");
++    setenv("KAYROS_DOMINANCE_PROFILE", path.c_str(), 1);
++    setenv("KAYROS_DOMINANCE_PROFILE_STRIDE", "2", 1);
++    setenv("KAYROS_DOMINANCE_PROFILE_OFFSET", scenario == 5 ? "1" : "0", 1);
++    const std::optional<TDNGRoutesParams> ng = std::nullopt;
++    BidirectionalLabeling bidi(instance(), ng);
++    auto& mono = CorrectionInvariantTest::Mono(bidi);
++    mono.sort_by_cost = mono.partial = true;
++    mono.elementary_check_relaxation = scenario == 3;
++    mono.cost_check_relaxation = scenario == 3;
++    DominanceProfileTest::Begin(bidi);
++    VertexSet outside; outside.set(2);
++    std::vector<Label*> originals;
++    for (int i = 0; i < 17; ++i) {
++        auto* label = new Label;
++        initialize(*label, PWLFunction::ConstantFunction(scenario == 2 || (scenario == 0 && i > 0) ? 2.0 : 0.0,
++                                                        {0.0, 10.0}), scenario == 1 && i == 0 ? VertexSet{} : outside);
++        originals.push_back(label);
++    }
++    mono.U[1].Insert(0, {});
++    mono.U[1].Insert(1, {}) = originals;
++    mono.U[1].Insert(2, {});
++    Label query;
++    initialize(query, PWLFunction::ConstantFunction(1.0, {0.0, 10.0}), {});
++    if (scenario == 4) { query.v = 4; query.min_cost = 0.0; }
++    const bool eliminated = CorrectionInvariantTest::Dominated(mono, &query);
++    require(eliminated == (scenario == 1 || scenario == 3 || scenario == 4), "Native ordinary result changed");
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++    const auto& u = totals(bidi, DominanceProfile::Kind::Dominance, eliminated);
++    invariants(u);
++    if (scenario == 5) {
++        require(u.sampled_calls == 0 && u.snapshot_label_reads == 0, "Unsampled native episode built masks");
++    } else {
++        require(u.sampled_calls == 1, "Native sampled call count changed");
++        if (scenario == 0 || scenario == 2) {
++            require(u.bucket_entries == 3 && u.demand_break_buckets == 1 && u.bucket_snapshots == 2 &&
++                    u.empty_bucket_snapshots == 1 && u.snapshot_label_reads == 17 && u.cost_break_snapshots == 1,
++                    "Native empty/demand/cost buckets changed");
++            for (const auto& scale : u.scales) {
++                const uint64_t count = scenario == 0 ? 1 : 0;
++                require(scale.actual_u_tests == count && scale.covered_actual_rejects == count &&
++                        scale.cost_break_entries == 1, "Native cost break inflated actual rejection coverage");
++            }
++        } else if (scenario == 1) {
++            require(u.early_elimination_snapshots == 1 && u.unvisited_snapshot_members == 16,
++                    "Native early elimination lost the suffix");
++            require(u.scales[1].snapshot_groups == 2 && u.scales[1].loop_reached_groups == 1,
++                    "Native early elimination credited an unvisited block");
++            for (const auto& scale : u.scales) require(scale.covered_actual_rejects == 0 && scale.actual_u_tests == 1,
++                                                      "Native early dominator inflated coverage");
++        } else if (scenario == 3) {
++            require(u.u_relaxed_calls == 1 && u.u_relaxed_buckets == 2 && u.bucket_snapshots == 0,
++                    "Relaxed U mode built masks");
++        } else if (scenario == 4) {
++            require(u.depot_shortcut_calls == 1 && u.bucket_entries == 0 && u.bucket_snapshots == 0,
++                    "Depot shortcut built masks");
++        }
++    }
++#endif
++    record(eliminated); record(query);
++    for (auto* label : originals) record(*label);
++    DominanceProfileTest::Profile(bidi).End({{"status", "Finished"}}, 0, 0);
++    CorrectionInvariantTest::Clean(bidi);
++}
++
++void correction(const std::filesystem::path& root, int scenario) {
++    const auto path = root / ("correction-" + std::to_string(scenario) + ".jsonl");
++    setenv("KAYROS_DOMINANCE_PROFILE", path.c_str(), 1);
++    setenv("KAYROS_DOMINANCE_PROFILE_STRIDE", "1", 1);
++    setenv("KAYROS_DOMINANCE_PROFILE_OFFSET", "0", 1);
++    const std::optional<TDNGRoutesParams> ng = std::nullopt;
++    BidirectionalLabeling bidi(instance(), ng);
++    auto& mono = CorrectionInvariantTest::Mono(bidi);
++    mono.sort_by_cost = mono.partial = true;
++    mono.cost_check_relaxation = scenario == 2;
++    mono.elementary_check_relaxation = scenario == 3;
++    DominanceProfileTest::Begin(bidi);
++    VertexSet arriving_set; arriving_set.set(2);
++    std::vector<Label*> originals;
++    for (int i = 0; i < 33; ++i) {
++        auto* label = new Label;
++        initialize(*label, PWLFunction::ConstantFunction(1.0, {0.0, 10.0}),
++                   i == (scenario == 0 ? 0 : 8) ? arriving_set : VertexSet{});
++        originals.push_back(label);
++    }
++    mono.U[1].Insert(2, {});
++    mono.U[1].Insert(1, {}) = originals;
++    mono.U[1].Insert(0, {});
++    Label arriving;
++    initialize(arriving, PWLFunction::ConstantFunction(0.0, {0.0, 10.0}), arriving_set);
++    const int removed = CorrectionInvariantTest::Correct(mono, &arriving);
++    require(removed == (scenario == 2 ? 0 : scenario == 3 ? 33 : 1), "Native correction result changed");
++#ifdef KAYROS_U_FILTER_OPPORTUNITY_PROFILING
++    const auto& u = totals(bidi, DominanceProfile::Kind::Correction, removed != 0);
++    invariants(u);
++    require(u.sampled_calls == 1, "Native correction sample count changed");
++    if (scenario < 2) {
++        require(u.snapshot_label_reads == 33 && u.retired_labels == 1 && u.membership_violations == 0 &&
++                u.unvisited_snapshot_members == 0 && u.empty_bucket_snapshots == 1 && u.demand_break_buckets == 1,
++                "Correction erasure disrupted its entry snapshot");
++        require(u.scales[0].covered_actual_rejects == 0 && u.scales[1].covered_actual_rejects == 17 &&
++                u.scales[2].covered_actual_rejects == 1 && u.scales[3].covered_actual_rejects == 0,
++                "Correction regrouped after erasure or rebuilt its stale OR");
++        for (const auto& scale : u.scales) require(scale.actual_u_tests == 33 && scale.subset_reject == 32 && scale.subset_pass == 1,
++                                                  "Correction lost an actual subset test");
++    } else if (scenario == 2) {
++        require(u.cost_relaxed_correction_calls == 1 && u.bucket_entries == 0 && u.bucket_snapshots == 0,
++                "HC correction shortcut built masks");
++    } else {
++        require(u.u_relaxed_calls == 1 && u.u_relaxed_buckets == 2 && u.bucket_snapshots == 0,
++                "U-relaxed correction built masks");
++    }
++#endif
++    record(removed); record(arriving);
++    for (auto* label : originals) record(*label);
++    DominanceProfileTest::Profile(bidi).End({{"status", "Finished"}}, 0, 0);
++    CorrectionInvariantTest::Clean(bidi);
++}
++}
++int main() {
++    unsetenv("KAYROS_DOMINANCE_PROFILE");
++    if (correction_base_fixture_main()) return 1;
++    char pattern[] = "/tmp/u-filter-native-XXXXXX";
++    const auto* directory = mkdtemp(pattern);
++    if (!directory) return 2;
++    const std::filesystem::path root(directory);
++    try {
++        for (bool exact : {false, true}) {
++            StepExactArithmeticScope scope(exact);
++            const auto sub = root / (exact ? "exact" : "legacy");
++            std::filesystem::create_directory(sub);
++            for (int scenario = 0; scenario < 6; ++scenario) ordinary(sub, scenario);
++            for (int scenario = 0; scenario < 4; ++scenario) correction(sub, scenario);
++        }
++        unsetenv("KAYROS_DOMINANCE_PROFILE");
++        std::filesystem::remove_all(root);
++        std::cout << "PASS native U-filter scenarios=20 state_digest=" << std::hex << digest << '\n';
++        return 0;
++    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
++}

@@ -186,7 +186,7 @@
       "patch": "patches/ms58-experimental/lera-eps-parity.patch",
       "sha256": "23b36405d306a839cdcbe5c5893057bdb45aee5e87b30d7790d2aa5c0d59f061",
       "purpose": "Isolate the shared algorithm-epsilon difference in Lera as a diagnostic contrast to the mandatory minimal reference.",
-      "qualification": "Build succeeded. Diagnostic source only, with f2c9e205bd1ecc9afb45d5efe7fcb0df881f2b33 retained as the fixed comparison control. Runtime evaluation remains pending.",
+      "qualification": "Diagnostic source. The 12-cell EPS experiment finished. Recorded work matched f2 on 8 completed C201 and RC201 cells, and 4 C104 deadline runs had the same printed iterations 0 through 52 and 59761 columns. Later EPS effects remain unknown. The fixed f2 control is unchanged.",
       "source_verification": {
         "patch_matches_exact_commit_diff": true,
         "patch_applies_to_declared_base_index": true
@@ -243,7 +243,7 @@
       "patch": "patches/ms58-experimental/remove-discarded-restriction.patch",
       "sha256": "577e57779cd37986369e2c7213b0182fb63a10d0246d8263261bc1de9260af33",
       "purpose": "Remove one discarded duration restriction from the correction-on candidate.",
-      "qualification": "Experimental candidate with runtime evaluation pending.",
+      "qualification": "Candidate. Six-cell audits passed and root and whole-run work matched 9d on C201 and RC201. Small observed timing differences are inconclusive. Paired confirmation is low priority and no promotion is made.",
       "source_verification": {
         "patch_matches_exact_commit_diff": true
       }
@@ -282,7 +282,7 @@
       "patch": "patches/ms58-experimental/dominance-profile-incremental.patch",
       "sha256": "66a1d4d2a65d9dd2c1f7df17640c09e929ffccf6f5e27c874a0578d41665503e",
       "purpose": "Instrument dominance and correction calls.",
-      "qualification": "Local 5040 gates passed with the same OFF and ON digest. The 6-cell dominance experiment finished with all 6 audited and no consistency failures. A derived U-opportunity profiler passed local native ON and OFF checks and Astra review. Packaging is ongoing and routing results are pending.",
+      "qualification": "Local 5040 gates passed with the same OFF and ON digest. Six dominance cells passed audit. Derived U-opportunity instrumentation 7d68859e passed 10 Grid 5000 native checks and its six-cell routing pilot launched. No production pruning or timing claim follows.",
       "source_verification": {
         "patch_matches_exact_commit_diff": true
       }
@@ -318,6 +318,17 @@
       "source_verification": {
         "patch_matches_exact_commit_diff": true
       }
+    },
+    {
+      "base": "a2dcf8870c17e7edeccb472b27bee0e544eec997",
+      "commit": "7d68859e8d6d8b8ae2382c1f7a88088709f099b1",
+      "purpose": "U-opportunity instrumentation.",
+      "qualification": "Ten Grid 5000 native checks passed. Six-cell routing pilot launched. No production pruning or timing claim.",
+      "runtime_identity": {
+        "core_sha256_prefix": "b527271e",
+        "lera_sha256": "06069acead992aedb7cfc44801240bb5d737eb8c4fa045e923ca18c191f95f44"
+      },
+      "schedule_sha256": "f70d1ceca410eaeac78ebf9dec2aa3c1fa2e444f0b116812bf5fda117f5ffcc8"
     }
   ],
   "point_addition_comment_only_followup": "ea6097e"

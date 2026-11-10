@@ -1,0 +1,12 @@
+{
+  "correction-on": {
+    "source_id": "9d64b7c53ddaea7a578d247ebd28db43ae0d4e56",
+    "core_sha256": "b527271e7224fbd1b14b6ed84de49098395e672172ab038a2cc45258572287f3",
+    "lera_sha256": "54b2f60bf61268a37c09dd49d0a60d3f71232948804a9910f188a87d12347b98"
+  },
+  "dominance-profile": {
+    "source_id": "7d68859e8d6d8b8ae2382c1f7a88088709f099b1",
+    "core_sha256": "b527271e7224fbd1b14b6ed84de49098395e672172ab038a2cc45258572287f3",
+    "lera_sha256": "06069acead992aedb7cfc44801240bb5d737eb8c4fa045e923ca18c191f95f44"
+  }
+}
