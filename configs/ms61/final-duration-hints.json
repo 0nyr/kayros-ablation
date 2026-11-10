@@ -1,0 +1,235 @@
+{
+ "schema_version": 1,
+ "purpose": "Scheduling hints only (long instances first). Estimated exact-arm cell duration: max_closure_s when every archived cell of the instance closed, otherwise the full horizon. Instances absent here (no solver past the root within an hour in ms61) are also scheduled at the full horizon.",
+ "source": "ms61 archives broad3, broad4, broad5, robust1 (single cold CPLEX and Lera f3 runs, 3,600 s, grvingt, 10 lanes)",
+ "source_summary_sha256": {
+  "broad3": "18d9d195aa501b63ad1f95a7022538bdc4ee5b77136e3c77e796610134fa237f",
+  "broad4": "9e707af329ca365bbdea5415adf38ad67256a5b470272bc2f18bffb767d996fd",
+  "broad5": "770d7681d2b1c6bbfb3b8458b02d2b8c982d69164c10d2c1177a6b260f45ba50",
+  "robust1": "7f1c367706b64220c37d06eaf4ba27802ac434becbb99a43ffda31c6d8044816"
+ },
+ "instances": {
+  "C101": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 2.5,
+   "all_closed": true
+  },
+  "C102": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 20.0,
+   "all_closed": true
+  },
+  "C103": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 125.7,
+   "all_closed": true
+  },
+  "C104": {
+   "cells": 30,
+   "closed": 28,
+   "max_closure_s": 3412.0,
+   "all_closed": false
+  },
+  "C105": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 5.1,
+   "all_closed": true
+  },
+  "C106": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 13.7,
+   "all_closed": true
+  },
+  "C107": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 5.9,
+   "all_closed": true
+  },
+  "C108": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 15.9,
+   "all_closed": true
+  },
+  "C109": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 13.4,
+   "all_closed": true
+  },
+  "C201": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 178.9,
+   "all_closed": true
+  },
+  "C202": {
+   "cells": 17,
+   "closed": 0,
+   "max_closure_s": null,
+   "all_closed": false
+  },
+  "C205": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 40.5,
+   "all_closed": true
+  },
+  "C206": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 152.6,
+   "all_closed": true
+  },
+  "C207": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 348.8,
+   "all_closed": true
+  },
+  "C208": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 230.4,
+   "all_closed": true
+  },
+  "R101": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 1.7,
+   "all_closed": true
+  },
+  "R102": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 7.9,
+   "all_closed": true
+  },
+  "R103": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 925.5,
+   "all_closed": true
+  },
+  "R104": {
+   "cells": 30,
+   "closed": 25,
+   "max_closure_s": 3518.9,
+   "all_closed": false
+  },
+  "R105": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 38.5,
+   "all_closed": true
+  },
+  "R106": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 932.2,
+   "all_closed": true
+  },
+  "R107": {
+   "cells": 30,
+   "closed": 27,
+   "max_closure_s": 3518.3,
+   "all_closed": false
+  },
+  "R108": {
+   "cells": 30,
+   "closed": 27,
+   "max_closure_s": 3525.6,
+   "all_closed": false
+  },
+  "R109": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 217.9,
+   "all_closed": true
+  },
+  "R110": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 2268.3,
+   "all_closed": true
+  },
+  "R111": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 330.8,
+   "all_closed": true
+  },
+  "R112": {
+   "cells": 17,
+   "closed": 0,
+   "max_closure_s": null,
+   "all_closed": false
+  },
+  "R201": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 580.9,
+   "all_closed": true
+  },
+  "RC101": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 272.3,
+   "all_closed": true
+  },
+  "RC102": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 752.2,
+   "all_closed": true
+  },
+  "RC103": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 566.9,
+   "all_closed": true
+  },
+  "RC104": {
+   "cells": 17,
+   "closed": 0,
+   "max_closure_s": null,
+   "all_closed": false
+  },
+  "RC105": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 151.9,
+   "all_closed": true
+  },
+  "RC106": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 282.0,
+   "all_closed": true
+  },
+  "RC107": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 2001.2,
+   "all_closed": true
+  },
+  "RC108": {
+   "cells": 17,
+   "closed": 0,
+   "max_closure_s": null,
+   "all_closed": false
+  },
+  "RC201": {
+   "cells": 30,
+   "closed": 30,
+   "max_closure_s": 354.0,
+   "all_closed": true
+  }
+ }
+}

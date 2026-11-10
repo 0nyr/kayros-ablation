@@ -134,7 +134,8 @@ class Checker:
             return {'valid': False, 'checked_cost': None, 'violations': f'{type(error).__name__}: {error}'}
 
 
-def load_cell(directory, out, checker):
+def load_cell(directory, out, checker, inputs_root=None):
+    """Validate one finished cell. inputs_root replaces <out>/inputs/Dabia2013 (archives rsynced without inputs/), the hash check stays."""
     record = json.loads((directory / 'cell.json').read_bytes())
     spec = record['cell']
     native = json.loads((directory / 'native.json').read_bytes()) if (directory / 'native.json').exists() else None
@@ -148,7 +149,7 @@ def load_cell(directory, out, checker):
     stderr = (directory / 'stderr.log').read_text(errors='replace') if (directory / 'stderr.log').exists() else ''
     exact, extras = exact_record(native)
     n = spec['n']
-    instance = out / 'inputs/Dabia2013' / f'n={n}' / f"{spec['instance']}.vrp.json"
+    instance = Path(inputs_root or out / 'inputs/Dabia2013') / f'n={n}' / f"{spec['instance']}.vrp.json"
     alerts, notes = [], []
     if not instance.exists() or sha256(instance) != record.get('inputs', {}).get('instance_sha256'):
         alerts.append(f'local input copy {instance} missing or differs from the remote instance hash')
@@ -174,7 +175,8 @@ def load_cell(directory, out, checker):
             alerts.append(f"native cost {c['native_cost']!r} differs from checked {c['checked_cost']!r} ({c['source']})")
     valid_costs = [c['checked_cost'] for c in checks if c['valid']]
     closures = [e for e in events if e.get('event') == 'closure']
-    bounds = [e['global_lb'] for e in events if e.get('event') in ('bound', 'closure') and finite(e.get('global_lb'))]
+    bound_trace = [(e.get('elapsed_s'), e['global_lb']) for e in events if e.get('event') in ('bound', 'closure') and finite(e.get('global_lb'))]
+    bounds = [value for _, value in bound_trace]
     measured = work(exact)
     final_lb = measured['best_bound'] if measured and finite(measured.get('best_bound')) else (bounds[-1] if bounds else None)
     final_value = extras.get('final_value') if finite(extras.get('final_value')) else (
@@ -210,6 +212,8 @@ def load_cell(directory, out, checker):
             'stderr_root_rows': len(table), 'stderr_root_last': table[-1] if table else None,
             'slow_root_iterations': [], 'root_table': table, 'env': spec.get('env'), 'runtime': runtime,
             'instance_sha256': record.get('inputs', {}).get('instance_sha256'), 'alerts': alerts, 'notes': notes,
+            'checks': [{key: c.get(key) for key in ('source', 'elapsed_s', 'valid', 'checked_cost', 'native_cost')} for c in checks],
+            'bound_trace': bound_trace,
             'extras': {k: v for k, v in extras.items() if k != 'final_paths'}}
 
 
@@ -272,7 +276,7 @@ def main():
     checker = Checker()
     cells, unfinished = [], []
     for directory in sorted((out / 'cells').iterdir()):
-        if not directory.is_dir() or '.stale-' in directory.name or '.failed-' in directory.name:
+        if not directory.is_dir() or any(tag in directory.name for tag in ('.stale-', '.failed-', '.orphan-')):
             continue
         if not (directory / 'cell.json').exists():
             unfinished.append(directory.name)
