@@ -157,7 +157,7 @@ EOF
         s=$(date +%s.%N)
         msg=$(OAR_JOB_ID=$job timeout "$oarsh_timeout" oarsh "$host" "bash '$starter'" </dev/null 2>&1) && rc=0 || rc=$?
         e=$(date +%s.%N)
-        printf '%s rc=%s dispatch_s=%.2f %s\n' "$host" "$rc" "$(python3 -c "print($e - $s)")" "$(tr '\n' ' ' <<<"$msg")" >"$out/runners/dispatch-$host.txt"
+        printf '%s rc=%s dispatch_s=%s %s\n' "$host" "$rc" "$(python3 -c "print(f'{$e - $s:.2f}')")" "$(tr '\n' ' ' <<<"$msg")" >"$out/runners/dispatch-$host.txt"
     ) &
 done
 wait

@@ -531,6 +531,9 @@ def summarize(out, args):
             'accepted_closures': sum(r['closure_s'] is not None for r in rows),
             'claimed_closures': sum(r['claimed_closure_s'] is not None for r in rows),
             'rejected_closures': sum(r['closure_rejected'] for r in rows),
+            # Claims whose only defect is the checker-infeasible priced column guard (ms58 qualified these instead of rejecting).
+            'guard_only_rejected_closures': sum(r['closure_rejected'] and r['rejected_reasons'] == ['soundness alert on the cell'] and r['alerts']
+                                                and all(a.startswith('Kayros closure with checker_infeasible_columns=') for a in r['alerts']) for r in rows),
             'restricted_mean_closure_s': restricted if exact_capable else None,
             'mean_lambda': mean_by_instance(rows, 'lambda'), 'mean_final_squeezed_gap': mean_by_instance(rows, 'final_squeezed_gap'),
             'feasible_runs': len(feasible),
@@ -624,7 +627,7 @@ def write_markdown(summary, directory):
         g = summary['groups'][arm]
         n = g['scheduled_cells']
         if g['exact_capable']:
-            closed = f"{g['accepted_closures']} / {n}" + (f" ({g['rejected_closures']} rejected)" if g['rejected_closures'] else '')
+            closed = f"{g['accepted_closures']} / {n}" + (f" ({g['rejected_closures']} rejected, {g['guard_only_rejected_closures']} of them only for the checker-infeasible column guard)" if g['rejected_closures'] else '')
             rmtp = fmt(g['restricted_mean_closure_s'])
         else:
             closed, rmtp = 'no proof capability', 'no proof capability'

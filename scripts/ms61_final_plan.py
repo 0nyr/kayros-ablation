@@ -11,8 +11,9 @@ Arm ids equal the worker arm names of ms58/ms61 (the ms55 design ids).
 Trial k of the ILS and full arms uses seed k of the paired list (42, 123, 456, 789, 2026). Cold exact and Lera trials are timing replications of a deterministic run (seed null).
 Cell ids are <instance>--<arm>--t<k>.
 
-Order: instances are grouped into duration strata (estimated from configs/ms61/final-duration-hints.json, long first), and cells are shuffled within each stratum with a seed chosen so that the static round-robin shards of ms61_run_cells.py (plan index % K) stay balanced in arms and in estimated load for every host count K in 2..60.
-The chosen seed and the worst-case balance figures are recorded in the plan's "design" block.
+Order: long cells first by estimated duration (configs/ms61/final-duration-hints.json), arms interleaved by a weighted golden-ratio sequence.
+Host balance comes from the dynamic sharding of ms61_run_cells.py (the default of ms61_remote_launch.sh), where each runner claims the next free cell in this order.
+The static index % K sharding is still possible but is not balanced for every K: the plan records its worst cases over K = 2..60 in the "design" block for information.
 
 Examples:
   python3 scripts/ms61_final_plan.py --cplex-venv /home/frascous/ms61-bpc/venvs/K17 --highs-venv /home/frascous/ms61-bpc/venvs/K17-highs --output configs/ms61/final.json

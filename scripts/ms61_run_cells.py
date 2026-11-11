@@ -295,7 +295,7 @@ def claim(cell_dir, host, runner_id, rerun_failed, job_cache=None, quiet=False):
                     return False
                 log(f'Moved unfinished {cell_dir.name} of host {owner.get("host")!r} (job {job}, no longer running) aside to {stale.name}')
             else:
-                if not (quiet and job == current):
+                if not (quiet and (job == current or not owner)):  # A claim being written right now is normal.
                     log(f'SKIP {cell_dir.name}: unfinished directory claimed by host {owner.get("host")!r} in job {job!r} '
                         f'(running={running}); move it aside by hand if that runner is dead')
                 return False
