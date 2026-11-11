@@ -501,7 +501,7 @@ def summarize(out, args):
                        checked_route_sets=c.get('checked_route_sets'), invalid_route_sets=sum(not k['valid'] for k in c['checks']),
                        alerts=c['alerts'], design_alerts=c['design_alerts'], evidence=c['evidence'],
                        nodes_closed=(c.get('work') or {}).get('nodes_closed'), worker_max_rss_kib=c.get('worker_max_rss_kib'),
-                       memory_failure='memory' in str(c.get('reason') or '').lower(), killed_after_grace=c.get('killed_after_grace'),
+                       memory_failure=bool(c.get('allocation_failure')) or 'memory' in str(c.get('reason') or '').lower(), killed_after_grace=c.get('killed_after_grace'),
                        validation_seconds=c.get('validation_seconds'))
         row.update(score(row['envelope'], reference, horizon))
         row['capped_closure_s'] = row['closure_s'] if row['closure_s'] is not None else horizon

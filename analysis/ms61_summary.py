@@ -203,7 +203,14 @@ def load_cell(directory, out, checker, inputs_root=None):
     runtime = record.get('runtime') or {}
     if spec['kind'] == 'lera' and runtime.get('binary_matches_ms58_f2') is not True:
         notes.append('Lera binary hash differs from the ms58 f2 executable')
+    # Recorded allocation failure (docs/resource-outcomes.md): a Kayros worker that exits 1 on a terminal MemoryError line,
+    # or the Lera binary that catches std::bad_alloc and returns 3. Both are resource outcomes under the per-process cap.
+    last_stderr = next((line for line in reversed(stderr.splitlines()) if line.strip()), '')
+    allocation_failure = record.get('status') == 'failed' and (
+        (spec['kind'] == 'kayros' and record.get('returncode') == 1 and last_stderr.startswith('MemoryError'))
+        or (spec['kind'] == 'lera' and record.get('returncode') == 3))
     return {'id': spec['id'], 'arm': spec.get('arm'), 'kind': spec['kind'], 'instance': spec['instance'], 'n': n,
+            'allocation_failure': allocation_failure, 'returncode': record.get('returncode'),
             'rep': spec.get('rep'), 'status': record.get('status'), 'reason': record.get('reason'),
             'host': record.get('host'), 'core': record.get('core'), 'time_limit_s': spec.get('time_limit_s'),
             'elapsed_s': record.get('elapsed_s'), 'closure_s': closures[0]['elapsed_s'] if closures else None,
