@@ -48,7 +48,14 @@ if (( stop_epoch <= start )); then
     echo "Launch window already closed: the walltime leaves no room for a $max_limit s cell"
     exit 3
 fi
-pattern="ms61_run_cells.py --plan $out/plan.json"
+# Liveness probe run on each host: the runner records its pid in runners/<host>.json. A pgrep on the command line would
+# match the probing shell itself.
+probe="$out/runners/alive.sh"
+cat >"$probe" <<'PROBE'
+#!/usr/bin/env bash
+p=$(sed -n 's/.*"pid": *\([0-9]*\).*/\1/p' "$1" 2>/dev/null | head -n 1)
+if [[ -n "$p" ]] && tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q ms61_run_cells; then echo 1; else echo 0; fi
+PROBE
 for host in "${hosts[@]}"; do
     starter="$out/runners/start-$host.sh"
     cat >"$starter" <<EOF
@@ -77,8 +84,8 @@ while true; do
     sleep "$poll"
     alive=0; unknown=0
     for host in "${hosts[@]}"; do
-        n=$(timeout 60 oarsh "$host" "pgrep -f '$pattern' | wc -l" </dev/null 2>/dev/null) || n=unknown
-        if [[ "$n" == unknown || -z "$n" ]]; then unknown=$((unknown + 1)); elif (( n > 0 )); then alive=$((alive + 1)); fi
+        n=$(timeout 60 oarsh "$host" "bash '$probe' '$out/runners/$host.json'" </dev/null 2>/dev/null | tail -n 1) || n=unknown
+        if [[ "$n" == 1 ]]; then alive=$((alive + 1)); elif [[ "$n" != 0 ]]; then unknown=$((unknown + 1)); fi
     done
     now=$(date +%s)
     if (( alive == 0 && unknown == 0 )); then idle=$((idle + 1)); else idle=0; fi
