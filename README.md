@@ -1,22 +1,22 @@
-# Kayros ablation experiments
+# Kayros component study harness
 
-This repository studies Kayros's exact component and its cooperation with heuristic search for the Time-Dependent Vehicle Routing Problem with Time Windows (TDVRPTW). We compare the original Lera-Romero solver, Kayros's exact component with 2 Linear Programming (LP) backends, its standalone heuristic and a heuristic prefix followed by exact search. CPLEX is the main exact backend to match the original solver, independently of any presumed speed advantage. A separate cold Kayros arm uses HiGHS under otherwise matched parameters. Finer algorithmic ablations are outside the study's scope.
+This repository holds the experiment harness, the plans and the analysis of the component study of KAYROS 1.7.0 on the Time-Dependent Vehicle Routing Problem with Time Windows (TDVRPTW). The final campaign ran 1,400 cells on Grid'5000, with the 56 Dabia2013 instances with 100 customers under the Duration objective, 5 arms, 5 trials per arm and instance, and 7,200 s and 16 GiB per cell. The arms are the repaired Lera-Romero solver with CPLEX (`lera-exact`), the cold KAYROS exact component with CPLEX (`kayros-bpca-cplex`) and with HiGHS (`kayros-bpca-highs`), the KAYROS Iterated Local Search (ILS) alone (`kayros-heuristics`), and an ILS prefix followed by the exact component with CPLEX (`kayros-full-cplex`). The [campaign runbook](docs/ms61-final-campaign.md) gives the commands, and `analysis/ms61_final_analysis.py` is the analysis of record.
 
-The completed pilots show improved anytime incumbent quality but a proof-speed gap against Lera-Romero. Onyr rejected the main-campaign launch recommendation on 2026-11-09. The [proof-speed improvement plan](docs/proof-speed-improvement-plan.md) now governs development, and the [current campaign status](configs/campaign-status.json) holds the main experiment until Kayros closes the gap and demonstrates improvement. The [full 16 GiB pilot](docs/ms56-hour-pilot-16g.md), [focused 2-hour pilot](docs/ms56-focused-pilot-16g.md), [main review](docs/main-campaign-review.md) and [nonlaunchable 1,400-cell proposal](configs/main-proposal.json) remain archived evidence. Their 15 s prefix and 7,200 s / 16 GiB configuration are starting points for the follow-up, not an approved launch. Synthetic examples remain distinct from measured results.
+## Published items
 
-## Experiment scope
+The study relies on 3 public items:
 
-The main panel contains all 56 original Dabia2013 TDVRPTW instances with 100 customers, evaluated under the Duration objective. Subsets with 25 and 50 customers supported correctness checks. Completed 12-instance n100 pilots use a 1-hour horizon at separate 8 and 16 GiB budgets. The separate 2-hour C104/RC202 pilot supplies targeted horizon and resource evidence. The recommended main horizon is 2 hours.
+- [KAYROS 1.7.0](https://github.com/0nyr/kayros/releases/tag/v1.7.0), the solver version of the campaign.
+- [The repaired baseline](https://github.com/0nyr/lera-tdvrptw-bpc-repaired), tag `component-study-as-run`, the Lera-Romero solver as run in the campaign.
+- [The dataset](https://doi.org/10.5281/zenodo.24153428), with the run records, the analysis outputs and the code used.
 
-| Arm | Definition |
-|---|---|
-| `lera-exact` | Original upstream solver with CPLEX, with separately recorded build and instrumentation patches |
-| `kayros-bpca-cplex` | Kayros v1.6.1 exact component with CPLEX, cold start |
-| `kayros-bpca-highs` | The same cold Kayros exact component with HiGHS and matched algorithmic parameters |
-| `kayros-heuristics` | Kayros v1.6.1 Iterated Local Search (ILS) |
-| `kayros-full-cplex` | ILS prefix followed by warm-started CPLEX exact search within one total budget |
+## Relation to the dataset
 
-The final experiment uses 5 trials per instance and arm, giving 1,400 cells across the 5 arms and 56 instances, with an upper budget of 2,800 solver core-hours at the recommended 2-hour horizon. ILS and full Kayros use 5 random seeds. The current cold exact APIs have no seed argument, so their trials are recorded as timing replications. Initial checks use 1 or 3 trials. The pilots compared fixed heuristic prefixes of 15, 60, 180, 600 and 1,800 seconds. Handoff occurs at the selected prefix deadline, without convergence or stagnation detection. The approved restricted mean computational-closure criterion selects 15 s globally.
+The dataset ships 24 files of this repository and the frozen reference snapshot under `references/`, in its folder `code/kayros-ablation/`. Its README cites them at commit `1b3e1a8` of this repository. Before publication, some commit messages and file contents of the development history were edited, so the corresponding commit now has the identifier `bffd7d0f88cb4615cbbe7e972e12a8c9d4f1c4f1` (see [commit-identifiers.md](docs/commit-identifiers.md)). The files shipped by the dataset are unchanged at that commit.
+
+## Working notes
+
+The documents under `docs/` are working notes of the development, kept as a record, and some of them describe as unreleased things that have since been released. In these notes, `$WORKSPACE` stands for the local parent directory of the development checkouts. The identifiers of commits of this repository cited in the notes predate the edit above and no longer resolve, and [commit-identifiers.md](docs/commit-identifiers.md) maps each of them to its published commit.
 
 ## Evaluation contract
 
@@ -61,7 +61,7 @@ Solver binaries, licensed dependencies, full instance/ATF data and real solver-r
 
 ## Sources and attribution
 
-- [Kayros](https://github.com/0nyr/kayros), v1.6.1 commit `50eebc57964ac4f6762719ff21033783a31c12da`.
+- [Kayros](https://github.com/0nyr/kayros), v1.6.1 commit `50eebc57964ac4f6762719ff21033783a31c12da` for the pilots, and v1.7.0 for the final campaign.
 - [Lera-Romero's networks2020 solver](https://github.com/gleraromero/networks2020), commit `cabc56ad9cdb22bed81a8a31f1671d40152055e6`.
 - [MAMUT-routing-lib](https://github.com/ANR-MAMUT/MAMUT-routing-lib), v0.11.0 commit `425dff351fdd9522ea6bb8c537dd416dfcd19614`.
 
@@ -69,4 +69,4 @@ Code created in this repository is distributed under the [MIT license](LICENSE).
 
 ## Development probes
 
-The [pilot and proof specification](docs/pilot-proof-parameters.md) records the frozen 12-instance panel, matched settings and operational closure scope alongside the historical stricter proof record. `scripts/run_solver_probe.py` launches a single diagnostic cell with a pinned runtime manifest. It is not a campaign scheduler. Run the lightweight fixture tests with `python -m unittest discover -s tests`. Build and run solver probes on reserved compute nodes. Follow the proof-speed plan before returning to main-campaign preparation.
+The [pilot and proof specification](docs/pilot-proof-parameters.md) records the frozen 12-instance panel, matched settings and operational closure scope alongside the historical stricter proof record. `scripts/run_solver_probe.py` launches a single diagnostic cell with a pinned runtime manifest. It is not a campaign scheduler. Run the lightweight fixture tests with `python -m unittest discover -s tests`. Build and run solver probes on reserved compute nodes.
